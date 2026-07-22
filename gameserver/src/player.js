@@ -43,6 +43,9 @@ class Player
         this.id = Player.getFreeSlot();
         Player.LIST[this.id] = this;
 
+        this.position = new pc.Vec3();
+        this.eulers = new pc.Vec3();
+
         this.name = "Player " + this.id;
         this.lastPingDate = null;
         this.latency = 100;
@@ -161,15 +164,16 @@ class Player
     {
         if(!this.entity) return;
 
-        this.awarenessBubble.setPosition(this.entity.getPosition());
+        this.awarenessBubble.setPosition(this.position);
+        this.entity.setPosition(this.position);
     }
 
     onLocalSnapshot(pos, eulers)
     {
         if(!this.entity) return;
 
-        this.entity.setPosition(pos[0], pos[1], pos[2]);
-        this.entity.setEulerAngles(eulers[0], eulers[1], eulers[2]);
+        this.position.set(pos[0], pos[1], pos[2]);
+        this.eulers.set(eulers[0], eulers[1], eulers[2]);
     }
 
     onDisconnect()
