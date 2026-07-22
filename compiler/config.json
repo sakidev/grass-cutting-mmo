@@ -1,0 +1,24 @@
+{
+  "srcPath": "client/src/",
+  "outDir": "client/build/builds/",
+  "version": "0.0.001",
+  "obfuscate": false,
+  "production": false,
+  "scriptsOrder": [
+    "engine.js",
+    "physics.js",
+    "bn.js",
+    "borsh.js",
+    "loader.js",
+    "packet.js",
+    "splToken.js",
+    "utils.js",
+    "web3.js",
+    "static_sounds.js",
+    "scenes.js",
+    "client.js",
+    "camera.js",
+    "player.js",
+    "game.js"
+  ]
+}

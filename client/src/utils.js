@@ -1,0 +1,122 @@
+window.audioAllowed = false;
+        /*document.addEventListener("click", function enableAudio(){
+            if(!window.audioAllowed)
+            {
+                window.audioAllowed = true;
+                console.log("Audio is now allowed");
+            }
+            document.removeEventListener("click", enableAudio);
+        });
+
+        document.addEventListener("touchstart", function enableAudioTouch(){
+            if(!window.audioAllowed)
+            {
+                window.audioAllowed = true;
+                console.log("Audio is now allowed");
+            }
+            document.removeEventListener("touchstart", enableAudioTouch);
+        });*/
+        
+(function(){
+    var utils = {};
+    var app = null;
+
+    utils.setGame = function(game){
+        app = game;
+    };
+
+    utils.initSoundForEntity = function(entity)
+    {
+        entity.playSound = (sound, path, options, callback) => {
+            // Don't play sounds if the window is not focused
+            // otherwise will lead to sounds playing all at once when the user
+            // comes back
+            /*if(BLURRED) return;
+            if(!window.audioAllowed) return;*/
+
+            if(!entity.sound)
+            {
+                console.log("Tried to play sound for entity", entity.name, "but it has no sound component!");
+                return;
+            }
+
+            if(!entity.sound.slots[sound])
+            {
+                loader.loadSound(path, sound, (asset)=>{
+                    if(!entity || !entity.sound) return;
+
+                    entity.sound.addSlot(sound, {
+                        asset: asset,
+                        pitch: 1,
+                        autoPlay: options ? options.autoPlay : true,
+                        loop: options ? options.loop : false,
+                        volume: options ? options.volume : 1
+                    });
+
+                    console.log("Playing sound", sound, "for entity", entity.name);
+
+                    if(callback)
+                        callback(entity.sound.slots[sound]);
+
+                    entity.sound.play(sound);
+                });
+            }
+            else
+            {
+                if(options.pitch)
+                {
+                    entity.sound.slots[sound].pitch = options.pitch;
+                }
+                entity.sound.play(sound);
+            }
+        };
+    };
+
+    /**
+     * @name utils#loadGlbContainerFromUrl
+     * @function
+     * @description Load a GLB container from a URL that returns a `model/gltf-binary` as a GLB.
+     * @param {String} url The URL for the GLB
+     * @param {Object} options Optional. Extra options to do extra processing on the GLB.
+     * @param {String} assetName. Name of the asset.
+     * @param {Function} callback The callback function for loading the asset. Signature is `function(string:error, asset:containerAsset)`.
+     * If `error` is null, then the load is successful.
+     * @returns {pc.Asset} The asset that is created for the container resource.
+     */
+    utils.loadGlbContainerFromUrl = function (url, options, assetName, callback) {
+        var filename = assetName + '.glb';
+        var file = {
+            url: url,
+            filename: filename
+        };
+
+        var asset = new pc.Asset(filename, 'container', file, null, options);
+        asset.once('load', function (containerAsset) {
+            if (callback) {
+                // As we play animations by name, if we have only one animation, keep it the same name as
+                // the original container otherwise, postfix it with a number
+                var animations = containerAsset.resource.animations;
+                if (animations.length == 1) {
+                    animations[0].name = assetName;
+                } else if (animations.length > 1) {
+                    for (var i = 0; i < animations.length; ++i) {
+                        animations[i].name = assetName + ' ' + i.toString();
+                    }
+                }
+
+                callback(null, containerAsset);
+            }
+        });
+
+        app.assets.add(asset);
+        app.assets.load(asset);
+
+        return asset;
+    };
+
+    utils.artificialDelay = async function(ms){
+        return new Promise(resolve => setTimeout(resolve, ms));
+    };
+
+    window.utils = utils;
+})();
