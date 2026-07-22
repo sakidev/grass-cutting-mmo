@@ -165,7 +165,12 @@ class Player
         if(!this.entity) return;
 
         this.awarenessBubble.setPosition(this.position);
-        this.entity.setPosition(this.position);
+        this.entity.rigidbody.teleport(
+            this.position.x,
+            this.position.y,
+            this.position.z
+        );
+        this.entity.rigidbody.linearVelocity = pc.Vec3.ZERO;
     }
 
     onLocalSnapshot(pos, eulers)
