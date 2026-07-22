@@ -123,6 +123,7 @@ class Client {
                       inPkt.ReadFloat(),
                       inPkt.ReadFloat()
                     ];
+                    const bladeRotSpeed = inPkt.ReadFloat();
 
                     let player = Player.getPlayerById(playerId);
                     if(!player)
@@ -131,7 +132,7 @@ class Client {
                       continue;
                     }
 
-                    player.sync(pos, eulers);
+                    player.sync(pos, eulers, bladeRotSpeed);
                 }
             }
             break;
@@ -192,17 +193,18 @@ class Client {
     } catch (err) {}
   }
 
-  sendLocalSnapshot(pos, eulers)
+  sendLocalSnapshot(pos, eulers, bladeRotationSpeed)
   {
     if (!this.connected) return;
 
-    const pkt = new OutgoingPacket(PacketHeader.Client.LOCAL_SNAPSHOT, 1 + (4*3) + (4*3));
+    const pkt = new OutgoingPacket(PacketHeader.Client.LOCAL_SNAPSHOT, 1 + (4*3) + (4*3) + 4);
     pkt.WriteFloat(pos.x);
     pkt.WriteFloat(pos.y);
     pkt.WriteFloat(pos.z);
     pkt.WriteFloat(eulers.x);
     pkt.WriteFloat(eulers.y);
     pkt.WriteFloat(eulers.z);
+    pkt.WriteFloat(bladeRotationSpeed);
 
     try {
       this.socket.send(pkt.buffer);

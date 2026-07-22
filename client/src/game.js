@@ -122,6 +122,17 @@ async function init()
     // example: game.batcher.addGroup("coins", true, 1000);
 
     await setupScene();
+    await loader.loadModel("res/models/assets.glb", "assets", (assetPack)=>{
+        const assets = assetPack.instantiateRenderEntity();
+        assets.enabled = false;
+        console.log(assets);
+        game.root.addChild(assets);
+
+        PREFABS.push({
+            name: "player",
+            entity: assets.findByName("Player")
+        });
+    });
 
     camera = new Camera();
 

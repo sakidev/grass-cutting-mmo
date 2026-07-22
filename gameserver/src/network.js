@@ -85,8 +85,9 @@ server.ws("/*", {
             inPkt.ReadFloat(),
             inPkt.ReadFloat()
           ];
+          const bladeRotSpeed = inPkt.ReadFloat();
 
-          ws.player.onLocalSnapshot(pos, eulers);
+          ws.player.onLocalSnapshot(pos, eulers, bladeRotSpeed);
         }
         break;
       default:

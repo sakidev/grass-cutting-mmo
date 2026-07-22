@@ -45,6 +45,7 @@ class Player
 
         this.position = new pc.Vec3();
         this.eulers = new pc.Vec3();
+        this.bladeRotationSpeed = 0;
 
         this.name = "Player " + this.id;
         this.lastPingDate = null;
@@ -173,12 +174,13 @@ class Player
         this.entity.rigidbody.linearVelocity = pc.Vec3.ZERO;
     }
 
-    onLocalSnapshot(pos, eulers)
+    onLocalSnapshot(pos, eulers, bladeRotSpeed)
     {
         if(!this.entity) return;
 
         this.position.set(pos[0], pos[1], pos[2]);
         this.eulers.set(eulers[0], eulers[1], eulers[2]);
+        this.bladeRotationSpeed = bladeRotSpeed;
     }
 
     onDisconnect()
@@ -199,7 +201,7 @@ setInterval(()=>
         if(!player) continue;
 
         let bytes = 1 + 4;
-        bytes += player.awareOfEntities.length * (4 + 4*3 + 4*3);
+        bytes += player.awareOfEntities.length * (4 + 4*3 + 4*3 + 4);
 
         const pkt = new OutgoingPacket(PacketHeader.GameServer.ACTORS_SYNC, bytes);
         pkt.WriteInt(player.awareOfEntities.length);
@@ -213,6 +215,7 @@ setInterval(()=>
             pkt.WriteFloat(actor.player.eulers.x);
             pkt.WriteFloat(actor.player.eulers.y);
             pkt.WriteFloat(actor.player.eulers.z);
+            pkt.WriteFloat(actor.player.bladeRotationSpeed);
         }
 
         try{ player.ws.send(pkt.buffer, true); }catch(err){ }

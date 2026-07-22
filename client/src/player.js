@@ -15,7 +15,6 @@ class Player
 
         this.isMine = client.mPlayerId === this.id;
 
-
         this.tempQuat = new pc.Quat();
 
         if(this.isMine)
@@ -38,6 +37,10 @@ class Player
 
         this.movementVec = new pc.Vec3(0, 0, 0);
         this.movementSpeed = 5;
+
+        this.bladeRotation = 0;
+        this.bladeRotationSpeed = 5;
+        this.bladeMaxRotationSpeed = 10;
 
         console.log("Creating player with id:", this.id, "isMine:", this.isMine);
 
@@ -64,10 +67,17 @@ class Player
         this.entity.player = this;
 
         this.modelHolder = new pc.Entity("modelHolder_" + this.id);
-        this.modelHolder.addComponent("render", {
+        /*this.modelHolder.addComponent("render", {
             type: "sphere",
             radius: 0.5
-        });
+        });*/
+        const playerPrefab = PREFABS.find((p) => p.name === "player").entity.clone();
+        playerPrefab.setLocalScale(0.35, 0.35, 0.35);
+        this.modelHolder.addChild(playerPrefab);
+        this.bladesHolder = new pc.Entity("bladesHolder_" + this.id);
+        playerPrefab.addChild(this.bladesHolder);
+        playerPrefab.findByName("Blade").reparent(this.bladesHolder);
+        
         this.entity.addChild(this.modelHolder);
 
         this.entity.addComponent("collision", {
@@ -83,16 +93,6 @@ class Player
             friction: 0,
             restitution: 0,
         });
-
-        const forwardBox = new pc.Entity("forwardBox_" + this.id);
-        forwardBox.addComponent("render", {
-            type: "box",
-            castShadows: false,
-            receiveShadows: false,
-        });
-        forwardBox.setLocalPosition(0, 0, -1);
-        forwardBox.setLocalScale(0.1, 0.1, 0.5);
-        this.modelHolder.addChild(forwardBox);
 
         this.entity.setPosition(
             position[0],
@@ -114,10 +114,11 @@ class Player
         this.entity.enabled = false;
     }
 
-    sync(position, eulers)
+    sync(position, eulers, bladeRotSpeed)
     {
         this.position = position;
         this.eulers = eulers;
+        this.bladeRotation = bladeRotSpeed;
 
         if(!this.entity) return;
         if(this.isMine) return;
@@ -131,29 +132,35 @@ class Player
         this.movementVec.set(0, 0, 0);
         this.latestFacingEulers.set(0, 0, 0);
 
+        let isMoving = false;
+
         if(game.keyboard.isPressed(pc.KEY_W)
         || game.keyboard.isPressed(pc.KEY_UP))
         {
             this.movementVec.z -= 1;
             this.latestFacingEulers.x = -15;
+            isMoving = true;
         }
         if(game.keyboard.isPressed(pc.KEY_A)
         || game.keyboard.isPressed(pc.KEY_LEFT))
         {
             this.movementVec.x -= 1;
             this.latestFacingEulers.z = 15;
+            isMoving = true;
         }
         if(game.keyboard.isPressed(pc.KEY_S)
         || game.keyboard.isPressed(pc.KEY_DOWN))
         {
             this.movementVec.z += 1;
             this.latestFacingEulers.x = 15;
+            isMoving = true;
         }
         if(game.keyboard.isPressed(pc.KEY_D)
         || game.keyboard.isPressed(pc.KEY_RIGHT))
         {
             this.movementVec.x += 1;
             this.latestFacingEulers.z = -15;
+            isMoving = true;
         }
 
         this.movementVec.normalize().scale(this.movementSpeed);
@@ -175,6 +182,21 @@ class Player
 
         this.modelHolder.setRotation(this.latestFacingQuat);
 
+        // Locally animate blade rotation speed
+        if(isMoving)
+        {
+            this.bladeRotation += 14.5 * 0.016;
+            if(this.bladeRotation > this.bladeMaxRotationSpeed)
+                this.bladeRotation = this.bladeMaxRotationSpeed;
+        }
+        else
+        {
+            this.bladeRotation -= 5 * 0.016;
+            if(this.bladeRotation < 5)
+            {
+                this.bladeRotation = 5;
+            }
+        }
 
         // Send out local snapshots to the game server
         const now = new Date();
@@ -184,7 +206,8 @@ class Player
 
             client.sendLocalSnapshot(
                 this.entity.getPosition(),
-                this.modelHolder.getEulerAngles()
+                this.modelHolder.getEulerAngles(),
+                this.bladeRotation
             );
         }
     }
@@ -212,5 +235,12 @@ class Player
     {
         if(this.isMine) this.local(dt);
         else this.remote(dt);
+
+
+        // Animate the blade holder
+        if(this.bladesHolder)
+        {
+            this.bladesHolder.rotateLocal(0, -this.bladeRotation, 0);
+        }
     }
 }
