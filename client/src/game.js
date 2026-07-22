@@ -16,6 +16,8 @@ let BLURRED;
 let USD_PER_SOL = 78.04;
 let USD_PER_SKR = 0.02;
 
+let tempVec;
+
 async function injectAnalytics()
 {
     try
@@ -116,6 +118,8 @@ async function init()
     });
     game.autoRender = true;
     game.start();
+
+    tempVec = new pc.Vec3();
 
     // Batcher
     game._batcher = new pc.BatchManager(game.graphicsDevice, game.root, game.scene);

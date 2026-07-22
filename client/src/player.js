@@ -42,6 +42,8 @@ class Player
         this.bladeRotationSpeed = 5;
         this.bladeMaxRotationSpeed = 10;
 
+        this.addedVelocity = new pc.Vec3();
+
         console.log("Creating player with id:", this.id, "isMine:", this.isMine);
 
         Player.LIST.push(this);
@@ -94,6 +96,25 @@ class Player
             restitution: 0,
         });
 
+        if(this.isMine)
+        {
+            this.entity.collision.on("collisionstart", (result) => {
+                //console.log("Player", this.id, "collided with", result.other.name);
+    
+                if(result.other.player && result.other.player !== this)
+                {
+                    //if(!result.other.player.isMine) return;
+
+                    console.log("Player", this.id, "collided with another player:", result.other.player.id);
+
+                    tempVec.copy(this.entity.getPosition());
+                    tempVec.sub(result.other.getPosition()).normalize().scale(7);
+                    tempVec.y = this.entity.getPosition().y;
+                    this.addedVelocity.add(tempVec);
+                }
+            });
+        }
+
         this.entity.setPosition(
             position[0],
             position[1],
@@ -127,6 +148,8 @@ class Player
     local(dt)
     {
         if(!this.entity.rigidbody) return;
+
+        this.addedVelocity.mulScalar(0.92);
 
         // Calculate & apply movement
         this.movementVec.set(0, 0, 0);
@@ -164,6 +187,7 @@ class Player
         }
 
         this.movementVec.normalize().scale(this.movementSpeed);
+        this.movementVec.add(this.addedVelocity);
 
         this.entity.rigidbody.linearVelocity = this.movementVec;
 
