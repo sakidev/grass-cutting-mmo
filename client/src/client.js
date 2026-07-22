@@ -118,6 +118,11 @@ class Client {
                       inPkt.ReadFloat(),
                       inPkt.ReadFloat()
                     ];
+                    const eulers = [
+                      inPkt.ReadFloat(),
+                      inPkt.ReadFloat(),
+                      inPkt.ReadFloat()
+                    ];
 
                     let player = Player.getPlayerById(playerId);
                     if(!player)
@@ -126,7 +131,7 @@ class Client {
                       continue;
                     }
 
-                    player.sync(pos);
+                    player.sync(pos, eulers);
                 }
             }
             break;

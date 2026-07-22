@@ -199,7 +199,7 @@ setInterval(()=>
         if(!player) continue;
 
         let bytes = 1 + 4;
-        bytes += player.awareOfEntities.length * (4 + 4*3);
+        bytes += player.awareOfEntities.length * (4 + 4*3 + 4*3);
 
         const pkt = new OutgoingPacket(PacketHeader.GameServer.ACTORS_SYNC, bytes);
         pkt.WriteInt(player.awareOfEntities.length);
@@ -210,6 +210,9 @@ setInterval(()=>
             pkt.WriteFloat(actor.getPosition().x);
             pkt.WriteFloat(actor.getPosition().y);
             pkt.WriteFloat(actor.getPosition().z);
+            pkt.WriteFloat(actor.player.eulers.x);
+            pkt.WriteFloat(actor.player.eulers.y);
+            pkt.WriteFloat(actor.player.eulers.z);
         }
 
         try{ player.ws.send(pkt.buffer, true); }catch(err){ }
