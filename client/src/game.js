@@ -6,6 +6,7 @@ let ui;
 let camera;
 let physics;
 let terrain;
+let grass;
 
 const SCRIPTS_TO_UPDATE = [];
 const PREFABS = [];
@@ -47,7 +48,7 @@ async function init()
 
     const canvas = document.getElementById("game-renderer");
 
-    let devices = ["webgpu", "webgl2", "webgl"];
+    let devices = [/*"webgpu",*/ "webgl2", "webgl"];
     if(isMobile && window.mobileDevice === "iOS")
         devices = ["webgl2"];
 
@@ -95,7 +96,7 @@ async function init()
 
     gd.application = game;
 
-    installGlobalCurvatureShader(game.graphicsDevice);
+    //installGlobalCurvatureShader(game.graphicsDevice);
 
     game.mouse.disableContextMenu();
 
@@ -122,7 +123,7 @@ async function init()
     game.autoRender = true;
     game.start();
 
-    installParticleCurvature(game.graphicsDevice);
+    //installParticleCurvature(game.graphicsDevice);
 
     tempVec = new pc.Vec3();
 
@@ -167,6 +168,15 @@ async function init()
     await TerrainMaterial.buildMaterial();
     terrain = new TerrainManager();
 
+    grass = new Grass();
+    Grass.buildMaterial();
+    Grass.setupInstancing();
+    Grass.installMesh(
+        Grass.createBladeMesh(),
+        1.0,
+        true
+    );
+
     // Start up the login and game clients
     client = new Client();
     client.connect({
@@ -191,13 +201,14 @@ function update(dt)
 
     if(ui) ui.postUpdate();
 
-    if(terrain && client.mPlayer)
+    if(terrain && client && client.mPlayer)
     {
         terrain.update(client.mPlayer.entity.getPosition().x, client.mPlayer.entity.getPosition().z);
     }
 
-    if(camera && camera.entity)
+    /*if(camera && camera.entity)
         updateCurvatureUniforms(camera.entity, game.graphicsDevice);
+    }*/
 }
 
 

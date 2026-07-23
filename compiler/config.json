@@ -21,6 +21,7 @@
     "player.js",
     "shaders.js",
     "terrain_manager.js",
+    "grass.js",
     "game.js"
   ]
 }
