@@ -17,6 +17,38 @@ window.audioAllowed = false;
             document.removeEventListener("touchstart", enableAudioTouch);
         });*/
         
+var mat4X = new pc.Vec3();
+var mat4Y = new pc.Vec3();
+var mat4Z = new pc.Vec3();
+
+var setMat4Up = (function () {
+    return function (mat4, forward, up) {
+        mat4Z.copy(forward).normalize();
+        // Inverse the forward direction as +z is pointing backwards due to the coordinate system
+        mat4Y.copy(up).scale(-1);
+        mat4X.cross(mat4Y, mat4Z).normalize();
+        mat4Y.cross(mat4Z, mat4X);
+
+        var r = mat4.data;
+
+        r[0]  = mat4X.x;
+        r[1]  = mat4X.y;
+        r[2]  = mat4X.z;
+        r[3]  = 0;
+        r[4]  = mat4Y.x;
+        r[5]  = mat4Y.y;
+        r[6]  = mat4Y.z;
+        r[7]  = 0;
+        r[8]  = mat4Z.x;
+        r[9]  = mat4Z.y;
+        r[10] = mat4Z.z;
+        r[11] = 0;
+        r[15] = 1;
+
+        return mat4;
+    };
+}());
+
 (function(){
     var utils = {};
     var app = null;

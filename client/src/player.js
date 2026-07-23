@@ -19,6 +19,8 @@ class Player
 
         if(this.isMine)
         {
+            client.mPlayer = this;
+
             this.syncRate = 25;
             this.lastSyncDate = new Date();
 
@@ -35,12 +37,27 @@ class Player
             this.remoteQuaternionLerped = new pc.Quat();
         }
 
+        this.tempVec = new pc.Vec3();
+        this.tempVec2 = new pc.Vec3();
+
+        this.gravity = 0;
+
         this.movementVec = new pc.Vec3(0, 0, 0);
         this.movementSpeed = 5;
 
         this.bladeRotation = 0;
         this.bladeRotationSpeed = 5;
         this.bladeMaxRotationSpeed = 10;
+
+        this.grounded = false;
+        this.groundDistance = 0;
+
+        this.snapDistance = 1;
+        this.snapStiffness = 10;
+        this.groundDistance = Infinity;
+
+        this.shadowRotationQuat = new pc.Quat();
+        this.shadowRotationMatrix = new pc.Mat4();
 
         this.addedVelocity = new pc.Vec3();
 
@@ -79,6 +96,10 @@ class Player
         this.bladesHolder = new pc.Entity("bladesHolder_" + this.id);
         playerPrefab.addChild(this.bladesHolder);
         playerPrefab.findByName("Blade").reparent(this.bladesHolder);
+
+        const shadowPrefab = PREFABS.find((p) => p.name === "blob_shadow").entity.clone();
+        this.shadow = shadowPrefab;
+        this.entity.addChild(shadowPrefab);
         
         this.entity.addChild(this.modelHolder);
 
@@ -145,9 +166,55 @@ class Player
         if(this.isMine) return;
     }
 
+    isGrounded()
+    {
+        this.tempVec.copy(this.entity.getPosition());
+        this.tempVec2.copy(pc.Vec3.UP).scale(-1.2).add(this.entity.getPosition());
+
+        const result = game.systems.rigidbody.raycastFirst(this.tempVec, this.tempVec2);
+        if (!result || !result.entity.name.includes("tile")) {
+            this.groundDistance = Infinity;
+            return false;
+        }
+
+        this.groundDistance = result.point.distance(this.entity.getPosition());
+
+        this.tempVec.copy(result.normal).scale(0.25).add(result.point);
+        if(this.shadow)
+        {
+            this.shadow.setPosition(this.tempVec);
+            
+            const axis = this.tempVec.cross(result.normal, pc.Vec3.RIGHT);
+            this.shadowRotationQuat.set(0, 0, 0, 0);
+            setMat4Up(
+                this.shadowRotationMatrix,
+                axis,
+                result.normal
+            );
+            this.shadowRotationQuat.setFromMat4(this.shadowRotationMatrix);
+            this.shadow.setRotation(this.shadowRotationQuat);
+        }
+
+        return this.groundDistance <= this.snapDistance; // e.g. 0.75
+    }
+
     local(dt)
     {
-        if(!this.entity.rigidbody) return;
+        if (!this.entity.rigidbody) return;
+
+        if (!this.grounded) {
+            this.gravity += 9.81 * 2 * dt;
+        }
+        else {
+            const target = 0.6;
+            const error = this.groundDistance - target; // >0 = floating, <0 = sunk
+
+            // gravity is positive-down here, matching your accumulator
+            this.gravity = error * this.snapStiffness; // e.g. 10
+            this.gravity = pc.math.clamp(this.gravity, -3, 3);
+
+            if (Math.abs(error) < 0.005) this.gravity = 0;
+        }
 
         this.addedVelocity.mulScalar(0.92);
 
@@ -188,6 +255,7 @@ class Player
 
         this.movementVec.normalize().scale(this.movementSpeed);
         this.movementVec.add(this.addedVelocity);
+        this.movementVec.y = -this.gravity;
 
         this.entity.rigidbody.linearVelocity = this.movementVec;
 
@@ -247,6 +315,9 @@ class Player
             15 * 0.016
         );
 
+        if(this.remotePosLerped.distance(this.remotePos) > 5)
+            this.remotePosLerped.copy(this.remotePos);
+
         if(!this.entity) return;
 
         this.entity.rigidbody.teleport(this.remotePosLerped, this.remoteQuaternionLerped);
@@ -257,6 +328,8 @@ class Player
 
     update(dt)
     {
+        this.grounded = this.isGrounded();
+
         if(this.isMine) this.local(dt);
         else this.remote(dt);
 

@@ -9,7 +9,7 @@ class Camera
             nearClip: 0.1,
         });
 
-        this.entity.rotateLocal(-45, 0, 0);
+        this.entity.rotateLocal(-55, 0, 0);
 
         this.entity.setPosition(0, 10, 10);
         game.root.addChild(this.entity);

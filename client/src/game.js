@@ -5,6 +5,7 @@ let client;
 let ui;
 let camera;
 let physics;
+let terrain;
 
 const SCRIPTS_TO_UPDATE = [];
 const PREFABS = [];
@@ -94,6 +95,8 @@ async function init()
 
     gd.application = game;
 
+    installGlobalCurvatureShader(game.graphicsDevice);
+
     game.mouse.disableContextMenu();
 
     loader = new Loader(game);
@@ -119,6 +122,8 @@ async function init()
     game.autoRender = true;
     game.start();
 
+    installParticleCurvature(game.graphicsDevice);
+
     tempVec = new pc.Vec3();
 
     // Batcher
@@ -136,6 +141,12 @@ async function init()
             name: "player",
             entity: assets.findByName("Player")
         });
+
+        PREFABS.push({
+            name: "blob_shadow",
+            entity: assets.findByName("blob_shadow")
+        });
+        console.log(PREFABS[1]);
     });
 
     camera = new Camera();
@@ -152,6 +163,9 @@ async function init()
     window.onfocus = function() {
         BLURRED = false;
     };
+
+    await TerrainMaterial.buildMaterial();
+    terrain = new TerrainManager();
 
     // Start up the login and game clients
     client = new Client();
@@ -176,6 +190,13 @@ function update(dt)
             SCRIPTS_TO_UPDATE[i].postUpdate();
 
     if(ui) ui.postUpdate();
+
+    if(terrain && client.mPlayer)
+    {
+        terrain.update(client.mPlayer.entity.getPosition().x, client.mPlayer.entity.getPosition().z);
+    }
+
+    updateCurvatureUniforms(camera.entity, game.graphicsDevice);
 }
 
 

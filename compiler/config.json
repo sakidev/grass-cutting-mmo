@@ -1,7 +1,7 @@
 {
   "srcPath": "client/src/",
   "outDir": "client/build/builds/",
-  "version": "0.0.001",
+  "version": "0.0.002",
   "obfuscate": false,
   "production": false,
   "scriptsOrder": [
@@ -19,6 +19,8 @@
     "client.js",
     "camera.js",
     "player.js",
+    "shaders.js",
+    "terrain_manager.js",
     "game.js"
   ]
 }
