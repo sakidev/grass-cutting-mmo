@@ -196,7 +196,8 @@ function update(dt)
         terrain.update(client.mPlayer.entity.getPosition().x, client.mPlayer.entity.getPosition().z);
     }
 
-    updateCurvatureUniforms(camera.entity, game.graphicsDevice);
+    if(camera && camera.entity)
+        updateCurvatureUniforms(camera.entity, game.graphicsDevice);
 }
 
 
