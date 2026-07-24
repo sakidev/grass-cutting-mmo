@@ -177,6 +177,31 @@ async function init()
         renderDist: 40
     });
     purple.cutRadius(25, -25, 2);
+    const white = new Grass(35, -35, 10, 10, 5000, {
+        baseColor: [0.15, 0.15, 0.15],
+        tipColor:  [0.90, 0.90, 0.90],
+        minHeight: 0.4, maxHeight: 2.5,
+        renderDist: 40
+    });
+
+    const red = new Grass(10, -10, 10, 10, 5000, {
+        baseColor: [0.30, 0.10, 0.10],
+        tipColor:  [0.90, 0.35, 0.35],
+        minHeight: 0.4, maxHeight: 1.5,
+        renderDist: 40
+    });
+    const green = new Grass(20, -10, 10, 10, 5000, {
+        baseColor: [0.10, 0.30, 0.10],
+        tipColor:  [0.35, 0.90, 0.35],
+        minHeight: 0.4, maxHeight: 1.5,
+        renderDist: 40
+    });
+    const blue = new Grass(30, -10, 10, 10, 5000, {
+        baseColor: [0.10, 0.10, 0.30],
+        tipColor:  [0.35, 0.35, 0.90],
+        minHeight: 0.4, maxHeight: 1.5,
+        renderDist: 40
+    });
     /*Grass.buildMaterial();
     Grass.setupInstancing();
     Grass.installMesh(
@@ -212,7 +237,7 @@ async function init()
     // Start up the login and game clients
     client = new Client();
     client.connect({
-        url: "ws://127.0.0.1:7777"
+        url: "ws://192.168.1.191:7777"
     });
 }
 
