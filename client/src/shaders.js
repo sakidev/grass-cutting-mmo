@@ -122,7 +122,8 @@ class TerrainMaterial {
     
             if(!game.graphicsDevice.isWebGPU)
             {
-                material.chunks.diffusePS = TerrainFragmentShaderGLSL;
+                const chunks = material.getShaderChunks(pc.SHADERLANGUAGE_GLSL);
+                chunks.set("diffusePS", TerrainFragmentShaderGLSL);
             }
             else
             {

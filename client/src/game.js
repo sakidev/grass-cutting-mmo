@@ -48,7 +48,8 @@ async function init()
 
     const canvas = document.getElementById("game-renderer");
 
-    let devices = [/*"webgpu",*/ "webgl2", "webgl"];
+    //let devices = ["webgpu", "webgl2", "webgl"];
+    let devices = ["webgl2", "webgl"];
     if(isMobile && window.mobileDevice === "iOS")
         devices = ["webgl2"];
 
@@ -96,7 +97,7 @@ async function init()
 
     gd.application = game;
 
-    //installGlobalCurvatureShader(game.graphicsDevice);
+    installGlobalCurvatureShader(game.graphicsDevice);
 
     game.mouse.disableContextMenu();
 
@@ -168,7 +169,6 @@ async function init()
     await TerrainMaterial.buildMaterial();
     terrain = new TerrainManager();
 
-    grass = new Grass();
     Grass.buildMaterial();
     Grass.setupInstancing();
     Grass.installMesh(
@@ -176,6 +176,31 @@ async function init()
         1.0,
         true
     );
+    grass = new Grass();
+    // …or a GLB
+    // Grass.loadBladeGlb('assets/blade.glb');
+
+    // Spawn a field
+    Grass.scatter(20, -20, 10, 10, 5_000);
+    /*
+    // or place blades individually from your own matrices
+    const m = new pc.Mat4();
+    m.setTRS(new pc.Vec3(5, 0, 3), new pc.Quat().setFromEulerAngles(0, 45, 0), new pc.Vec3(1, 0.8, 1));
+    const handle = Grass.addBlade(m);*/
+
+    // cutting
+    // Grass.cutRadius(playerX, playerZ, 1.5);
+
+    /*
+    const h = Grass.findBlade(playerX, playerZ, 0.5);
+    if (h >= 0) Grass.removeBlade(h);*/
+
+    /*
+    // recolour whenever
+    Grass.setColors([0.1, 0.3, 0.05], [0.6, 0.85, 0.3]);
+    Grass.setColorVariance(0.8);
+    Grass.setVarianceSplit(0.1, 0.35, 1.0);   // splitY, dim below, bright above*/
+    Grass.repack();
 
     // Start up the login and game clients
     client = new Client();
@@ -206,9 +231,8 @@ function update(dt)
         terrain.update(client.mPlayer.entity.getPosition().x, client.mPlayer.entity.getPosition().z);
     }
 
-    /*if(camera && camera.entity)
+    if(camera && camera.entity)
         updateCurvatureUniforms(camera.entity, game.graphicsDevice);
-    }*/
 }
 
 

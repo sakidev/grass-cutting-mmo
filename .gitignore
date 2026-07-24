@@ -143,3 +143,4 @@ vite.config.ts.timestamp-*
 .vite/
 client/build/builds/client-0.0.001.js
 client/build/builds/client-0.0.002.js
+client/build/builds/client-0.0.001.js
