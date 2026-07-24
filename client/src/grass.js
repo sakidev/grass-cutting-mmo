@@ -424,7 +424,7 @@ class Grass
     // ------------------------------------------------------------------
     static MAX_COLLIDERS = 10;
     static colliderSlots = [];
-    static collisionStrength = 2.0;
+    static collisionStrength = 1.0;
 
     static material = null;
     static sharedMesh = null;
@@ -667,7 +667,7 @@ class Grass
         }
 
         Grass.setGrassColliders([
-            { x: p.x, y: p.y, z: p.z, radius: 4.0 }
+            { x: p.x, y: p.y, z: p.z, radius: 1.5 }
         ]);
 
         for (const patch of Grass.patches) {
