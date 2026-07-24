@@ -388,47 +388,89 @@ const grassFS_wgsl = `
 `;
 
 
+// =====================================================================
+//  GRASS PATCHES — instance-based, per-patch colors/params
+//
+//  Shader chunk strings (grassVS, grassFS, grassVS_wgsl, grassFS_wgsl,
+//  grassUserMainEndVS_wgsl) are UNCHANGED — keep them exactly as they
+//  are above this class. Only the Grass class is replaced.
+//
+//  Usage:
+//      new Grass(0, 0, 10, 10, 5000);
+//      new Grass(25, -25, 10, 10, 5000, {
+//          baseColor: [0.15, 0.10, 0.30],
+//          tipColor:  [0.60, 0.35, 0.90],
+//          minHeight: 0.4, maxHeight: 0.9
+//      });
+//
+//  How it works:
+//  - ONE shared StandardMaterial + ONE shared blade mesh for all patches
+//    (single shader compile). Per-patch looks are done with
+//    meshInstance.setParameter() overrides, which beat the material's
+//    values at draw time.
+//  - Each patch owns its own instance VertexBuffer, MeshInstance,
+//    entity, blade list and a TIGHT custom AABB — so frustum culling
+//    now actually works per patch (the old code had one giant AABB and
+//    cull disabled).
+//  - Global stuff (time, wind, camera pos, colliders, curvature) is set
+//    once per frame on the shared material by an internal updater that
+//    registers itself in SCRIPTS_TO_UPDATE on first use.
+// =====================================================================
+
 class Grass
 {
+    // ------------------------------------------------------------------
+    //  shared / static
+    // ------------------------------------------------------------------
     static MAX_COLLIDERS = 10;
     static colliderSlots = [];
     static collisionStrength = 2.0;
-    static MAX_INSTANCES = 400000;
 
     static material = null;
-    static grassMI = null;
-    static grassEntity = null;
-    static instanceBuffer = null;
-    static matrixData = null;
+    static sharedMesh = null;
+    static sharedBladeHeight = 1.0;
+    static sharedHasVC = false;
+    static _meshPending = false;
 
-    static blades = [];
-    static freeList = [];
-    static liveCount = 0;
-    static dirty = false;
+    static patches = [];
+    static _inited = false;
+    static _updater = null;
 
     static renderDist = 60;
 
-    static buildMaterial()
+    static _ensureInit()
+    {
+        if (Grass._inited) return;
+        Grass._inited = true;
+
+        Grass._buildMaterial();
+
+        Grass._updater = {
+            time: 0,
+            update(dt) { Grass._update(dt, this); }
+        };
+        SCRIPTS_TO_UPDATE.push(Grass._updater);
+    }
+
+    static _buildMaterial()
     {
         const m = new pc.StandardMaterial();
 
         if (!game.graphicsDevice.isWebGPU) {
             m.chunks.transformVS = grassVS;
-            //m.chunks.normalVS    = grassNormalVS;
             m.chunks.diffusePS   = grassFS;
         } else {
             const chunks = m.getShaderChunks(pc.SHADERLANGUAGE_WGSL);
             chunks.set('transformVS', grassVS_wgsl);
             chunks.set('diffusePS', grassFS_wgsl);
             chunks.set('litUserMainEndVS', grassUserMainEndVS_wgsl);
-            /*m.chunks.transformVS = grassVS_wgsl;
-            //m.chunks.normalVS    = grassNormalVS_wgsl;
-            m.chunks.diffusePS   = grassFS_wgsl;*/
         }
 
         m.cull = pc.CULLFACE_NONE;
         m.diffuseVertexColor = true;
 
+        // material-level values = defaults; patches override via
+        // meshInstance.setParameter()
         m.setParameter('uTime', 0);
         m.setParameter('uRenderDist', Grass.renderDist);
         m.setParameter('uWindDir', [1, 0, 0.35]);
@@ -445,11 +487,6 @@ class Grass
         m.setParameter('uVarianceLow', 0.35);
         m.setParameter('uVarianceHigh', 1.0);
 
-        // Unneeded, this is set globally every frame by updateCurvatureUniforms()
-        /*m.setParameter('uCameraWorldPos', [0, 0, 0]);
-        m.setParameter('uCurvatureStrength', 0.0);
-        m.setParameter('uCurvatureExp', 2.0);*/
-
         for (let i = 0; i < Grass.MAX_COLLIDERS; i++) {
             Grass.colliderSlots.push(new Float32Array(4));
             m.setParameter('uCollider' + i, Grass.colliderSlots[i]);
@@ -460,255 +497,75 @@ class Grass
         Grass.material = m;
     }
 
-    static setColors(baseRGB, tipRGB) {
-        if (baseRGB) Grass.material.setParameter('uGrassBaseColor', baseRGB);
-        if (tipRGB)  Grass.material.setParameter('uGrassTipColor', tipRGB);
-    }
-
-    static setColorVariance(v) {
-        Grass.material.setParameter('uColorVariance', v);
-    }
-
-    static setVarianceSplit(splitY, lowMul, highMul) {
-        Grass.material.setParameter('uVarianceSplitY', splitY);
-        Grass.material.setParameter('uVarianceLow', lowMul);
-        Grass.material.setParameter('uVarianceHigh', highMul);
-    }
-
-    static setWind(dirXYZ, strength) {
-        if (dirXYZ) Grass.material.setParameter('uWindDir', dirXYZ);
-        if (strength !== undefined) Grass.material.setParameter('uWindStrength', strength);
-    }
-
-    static setTipBias(metres, enabled) {
-        Grass.material.setParameter('uTipBias', metres);
-        Grass.material.setParameter('uTipEnabled', enabled ? 1.0 : 0.0);
-    }
-
-    static setCurvature(strength, exponent) {
-        if (strength !== undefined) Grass.material.setParameter('uCurvatureStrength', strength);
-        if (exponent !== undefined) Grass.material.setParameter('uCurvatureExp', exponent);
-    }
-
-    static setupInstancing()
+    // ------------------------------------------------------------------
+    //  shared mesh handling
+    // ------------------------------------------------------------------
+    static _setSharedMesh(mesh, bladeHeight, hasVC)
     {
-        const device = game.graphicsDevice;
+        Grass.sharedMesh = mesh;
+        Grass.sharedBladeHeight = bladeHeight;
+        Grass.sharedHasVC = hasVC;
+        Grass._meshPending = false;
 
-        Grass.matrixData = new Float32Array(Grass.MAX_INSTANCES * 16);
-        Grass.instanceBuffer = new pc.VertexBuffer(
-            device,
-            pc.VertexFormat.getDefaultInstancingFormat(device),
-            Grass.MAX_INSTANCES,
-            {
-                usage: pc.BUFFER_DYNAMIC
-            }
-        );
-
-        const e = new pc.Entity('grass');
-        e.addComponent('render', { meshInstances: [] });
-        game.root.addChild(e);
-        Grass.grassEntity = e;
-    }
-
-    static installMesh(mesh, bladeHeight, hasVertexColor)
-    {
         Grass.material.setParameter('uBladeHeight', bladeHeight);
-        if (hasVertexColor) Grass.material.setParameter('uUseVertexColor', 1.0);
+        Grass.material.setParameter('uUseVertexColor', hasVC ? 1.0 : 0.0);
         Grass.material.update();
 
-        const mi = new pc.MeshInstance(mesh, Grass.material, Grass.grassEntity);
-        mi.cull = false;
-        mi.setInstancing(Grass.instanceBuffer);
-        // instancing hides instance positions from the culler — supply the
-        // field bounds explicitly, otherwise the aabb stays a single blade
-        // at the origin and everything gets culled
-        const bounds = new pc.BoundingBox(
-            new pc.Vec3(0, bladeHeight * 0.5, 0),
-            new pc.Vec3(500, bladeHeight * 2, 500)
-        );
-        mi.setCustomAabb(bounds);
-
-console.log('[grass] setCustomAabb exists:', typeof mi.setCustomAabb,
-            'pc.version:', pc.version,
-            '_customAabb:', mi._customAabb,
-            'aabb after:', mi.aabb.halfExtents);
-
-        mi.visible = true;
-
-        Grass.grassMI = mi;
-        Grass.grassEntity.render.meshInstances = [mi];
-
-        Grass.dirty = true;
-
-        console.log('[grass] instancingData', mi.instancingData,
-            'count', mi.instancingData && mi.instancingData.count,
-            'mesh', mi.mesh, 'aabb', mi.aabb);
+        // (re)install on every existing patch
+        for (const p of Grass.patches) p._installMeshInstance();
     }
 
-    static addBlade(mat4) {
-        let index;
-        if (Grass.freeList.length > 0) {
-            index = Grass.freeList.pop();
-        } else {
-            if (Grass.liveCount >= Grass.MAX_INSTANCES) return -1;
-            index = Grass.liveCount++;
-        }
-        Grass.blades[index] = mat4.clone();
-        Grass.dirty = true;
-        return index;
-    }
-
-    static addBladeTRS(pos, rotDegY, scale) {
-        const m = new pc.Mat4();
-        const q = new pc.Quat().setFromEulerAngles(0, rotDegY || 0, 0);
-        const s = (typeof scale === 'number')
-            ? new pc.Vec3(scale, scale, scale)
-            : (scale || new pc.Vec3(1, 1, 1));
-        m.setTRS(pos, q, s);
-        return Grass.addBlade(m);
-    }
-
-    static addBlades(mat4Array) {
-        const handles = [];
-        for (let i = 0; i < mat4Array.length; i++) {
-            handles.push(Grass.addBlade(mat4Array[i]));
-        }
-        return handles;
-    }
-
-    static scatter(centerX, centerZ, width, depth, count, opts) {
-        opts = opts || {};
-        const minH = opts.minHeight !== undefined ? opts.minHeight : 0.5;
-        const maxH = opts.maxHeight !== undefined ? opts.maxHeight : 1.1;
-        const minW = opts.minWidth  !== undefined ? opts.minWidth  : 0.7;
-        const maxW = opts.maxWidth  !== undefined ? opts.maxWidth  : 1.3;
-        const yFn  = opts.heightFn || Grass.terrainHeight;
-
-        const handles = [];
-        for (let i = 0; i < count; i++) {
-            const x = centerX + (Math.random() - 0.5) * width;
-            const z = centerZ + (Math.random() - 0.5) * depth;
-            const h = minH + Math.random() * (maxH - minH);
-            const w = minW + Math.random() * (maxW - minW);
-            handles.push(Grass.addBladeTRS(
-                new pc.Vec3(x, yFn(x, z), z),
-                Math.random() * 360,
-                new pc.Vec3(w, h, w)
-            ));
-        }
-        return handles;
-    }
-
-    static removeBlade(index) {
-        if (index < 0 || index >= Grass.liveCount) return false;
-        if (!Grass.blades[index]) return false;
-        Grass.blades[index] = null;
-        Grass.freeList.push(index);
-        Grass.dirty = true;
-        return true;
-    }
-
-    static cutRadius(x, z, radius) {
-        const r2 = radius * radius;
-        let cut = 0;
-        for (let i = 0; i < Grass.liveCount; i++) {
-            const m = Grass.blades[i];
-            if (!m) continue;
-            const d = m.data;
-            const dx = d[12] - x, dz = d[14] - z;
-            if (dx * dx + dz * dz <= r2) {
-                Grass.blades[i] = null;
-                Grass.freeList.push(i);
-                cut++;
-            }
-        }
-        if (cut > 0) Grass.dirty = true;
-        return cut;
-    }
-
-    static findBlade(x, z, maxDist) {
-        let best = -1;
-        let bestD = maxDist !== undefined ? maxDist * maxDist : Infinity;
-        for (let i = 0; i < Grass.liveCount; i++) {
-            const m = Grass.blades[i];
-            if (!m) continue;
-            const d = m.data;
-            const dx = d[12] - x, dz = d[14] - z;
-            const dd = dx * dx + dz * dz;
-            if (dd < bestD) { bestD = dd; best = i; }
-        }
-        return best;
-    }
-
-    static updateBlade(index, mat4) {
-        if (index < 0 || index >= Grass.liveCount || !Grass.blades[index]) return false;
-        Grass.blades[index].copy(mat4);
-        Grass.dirty = true;
-        return true;
-    }
-
-    static getBladePosition(index, out) {
-        if (index < 0 || index >= Grass.liveCount || !Grass.blades[index]) return null;
-        const d = Grass.blades[index].data;
-        out = out || new pc.Vec3();
-        out.set(d[12], d[13], d[14]);
-        return out;
-    }
-
-    static clearBlades() {
-        Grass.blades.length = 0;
-        Grass.freeList.length = 0;
-        Grass.liveCount = 0;
-        Grass.dirty = true;
-    }
-
-    static getBladeCount() {
-        return Grass.liveCount - Grass.freeList.length;
-    }
-
-    static repack()
+    static useProceduralBlade()
     {
-        if (!Grass.grassMI) return;
-
-        let write = 0;
-        for (let i = 0; i < Grass.liveCount; i++) {
-            const m = Grass.blades[i];
-            if (!m) continue;
-            Grass.matrixData.set(m.data, write * 16);
-            write++;
-        }
-
-        if (write > 0) {
-            new Float32Array(Grass.instanceBuffer.lock(), 0, write * 16)
-                .set(Grass.matrixData.subarray(0, write * 16));
-            Grass.instanceBuffer.unlock();
-        }
-
-        Grass.grassMI.instancingCount = write;
-        Grass.grassMI.visible = write > 0;
-        Grass.dirty = false;
+        Grass._ensureInit();
+        Grass._setSharedMesh(Grass.createBladeMesh(), 1.0, true);
     }
 
-    static setGrassColliders(list)
+    static loadBladeGlb(url, onDone)
     {
-        const n = Math.min(list ? list.length : 0, Grass.MAX_COLLIDERS);
-        for (let i = 0; i < Grass.MAX_COLLIDERS; i++) {
-            const s = Grass.colliderSlots[i];
-            if (i < n) {
-                const c = list[i];
-                s[0] = c.x;
-                s[1] = c.y !== undefined ? c.y : 0;
-                s[2] = c.z;
-                s[3] = c.radius !== undefined ? c.radius : 1.0;
-            } else {
-                s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;
-            }
-            Grass.material.setParameter('uCollider' + i, s);
-        }
-    }
+        Grass._ensureInit();
+        Grass._meshPending = true;
 
-    static terrainHeight(x, z) {
-        return 0;
+        const asset = new pc.Asset('grassBlade', 'container', { url: url });
+        game.assets.add(asset);
+
+        asset.once('load', () => {
+            try {
+                const renders = asset.resource.renders;
+                if (!renders || renders.length === 0) throw new Error('no renders');
+                const meshes = renders[0].resource.meshes;
+                if (!meshes || meshes.length === 0) throw new Error('no meshes');
+
+                const mesh = meshes[0];
+                const aabb = mesh.aabb;
+                const bladeHeight = aabb ? (aabb.center.y + aabb.halfExtents.y) : 1.0;
+
+                let hasVC = false;
+                const elems = mesh.vertexBuffer.format.elements;
+                for (let i = 0; i < elems.length; i++) {
+                    if (elems[i].name === pc.SEMANTIC_COLOR) { hasVC = true; break; }
+                }
+
+                console.log('[grass] GLB ok —', mesh.vertexBuffer.numVertices,
+                            'verts, height', bladeHeight.toFixed(3),
+                            'vertex colours:', hasVC);
+
+                Grass._setSharedMesh(mesh, bladeHeight, hasVC);
+                if (onDone) onDone(true);
+            } catch (e) {
+                console.warn('[grass] GLB unusable (' + e.message + '), using procedural blade');
+                Grass._setSharedMesh(Grass.createBladeMesh(), 1.0, true);
+                if (onDone) onDone(false);
+            }
+        });
+
+        asset.once('error', (err) => {
+            console.warn('[grass] GLB failed to load (' + err + '), using procedural blade');
+            Grass._setSharedMesh(Grass.createBladeMesh(), 1.0, true);
+            if (onDone) onDone(false);
+        });
+
+        game.assets.load(asset);
     }
 
     static createBladeMesh()
@@ -739,65 +596,65 @@ console.log('[grass] setCustomAabb exists:', typeof mi.setCustomAabb,
         return mesh;
     }
 
-    static loadBladeGlb(url, onDone)
+    // ------------------------------------------------------------------
+    //  global (all-patch) setters — same API as before
+    // ------------------------------------------------------------------
+    static setWind(dirXYZ, strength) {
+        Grass._ensureInit();
+        if (dirXYZ) Grass.material.setParameter('uWindDir', dirXYZ);
+        if (strength !== undefined) Grass.material.setParameter('uWindStrength', strength);
+    }
+
+    static setCurvature(strength, exponent) {
+        Grass._ensureInit();
+        if (strength !== undefined) Grass.material.setParameter('uCurvatureStrength', strength);
+        if (exponent !== undefined) Grass.material.setParameter('uCurvatureExp', exponent);
+    }
+
+    static setGrassColliders(list)
     {
-        const asset = new pc.Asset('grassBlade', 'container', { url: url });
-        game.assets.add(asset);
-
-        asset.once('load', () => {
-            try {
-                const renders = asset.resource.renders;
-                if (!renders || renders.length === 0) throw new Error('no renders');
-                const meshes = renders[0].resource.meshes;
-                if (!meshes || meshes.length === 0) throw new Error('no meshes');
-
-                const mesh = meshes[0];
-                const aabb = mesh.aabb;
-                const bladeHeight = aabb ? (aabb.center.y + aabb.halfExtents.y) : 1.0;
-
-                let hasVC = false;
-                const elems = mesh.vertexBuffer.format.elements;
-                for (let i = 0; i < elems.length; i++) {
-                    if (elems[i].name === pc.SEMANTIC_COLOR) { hasVC = true; break; }
-                }
-
-                console.log('[grass] GLB ok —', mesh.vertexBuffer.numVertices,
-                            'verts, height', bladeHeight.toFixed(3),
-                            'vertex colours:', hasVC);
-
-                Grass.installMesh(mesh, bladeHeight, hasVC);
-                Grass.repack();
-                if (onDone) onDone(true);
-            } catch (e) {
-                console.warn('[grass] GLB unusable (' + e.message + '), using procedural blade');
-                Grass.installMesh(Grass.createBladeMesh(), 1.0, true);
-                Grass.repack();
-                if (onDone) onDone(false);
+        const n = Math.min(list ? list.length : 0, Grass.MAX_COLLIDERS);
+        for (let i = 0; i < Grass.MAX_COLLIDERS; i++) {
+            const s = Grass.colliderSlots[i];
+            if (i < n) {
+                const c = list[i];
+                s[0] = c.x;
+                s[1] = c.y !== undefined ? c.y : 0;
+                s[2] = c.z;
+                s[3] = c.radius !== undefined ? c.radius : 1.0;
+            } else {
+                s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;
             }
-        });
-
-        asset.once('error', (err) => {
-            console.warn('[grass] GLB failed to load (' + err + '), using procedural blade');
-            Grass.installMesh(Grass.createBladeMesh(), 1.0, true);
-            Grass.repack();
-            if (onDone) onDone(false);
-        });
-
-        game.assets.load(asset);
+            Grass.material.setParameter('uCollider' + i, s);
+        }
     }
 
-    constructor()
-    {
-        this.time = 0;
-        SCRIPTS_TO_UPDATE.push(this);
+    // convenience: cut across every patch (e.g. explosion)
+    static cutRadiusAll(x, z, radius) {
+        let cut = 0;
+        for (const p of Grass.patches) cut += p.cutRadius(x, z, radius);
+        return cut;
     }
 
-    update(dt)
+    static getTotalBladeCount() {
+        let n = 0;
+        for (const p of Grass.patches) n += p.getBladeCount();
+        return n;
+    }
+
+    static terrainHeight(x, z) {
+        return 0;
+    }
+
+    // ------------------------------------------------------------------
+    //  per-frame global update (single registered updater)
+    // ------------------------------------------------------------------
+    static _update(dt, self)
     {
-        this.time += dt;
+        self.time += dt;
 
         const cp = camera.entity.getPosition();
-        Grass.material.setParameter('uTime', this.time);
+        Grass.material.setParameter('uTime', self.time);
         Grass.material.setParameter('uRenderDist', Grass.renderDist);
         Grass.material.setParameter('uCollisionStrength', Grass.collisionStrength);
         Grass.material.setParameter('uCameraWorldPos', [cp.x, cp.y, cp.z]);
@@ -813,6 +670,335 @@ console.log('[grass] setCustomAabb exists:', typeof mi.setCustomAabb,
             { x: p.x, y: p.y, z: p.z, radius: 4.0 }
         ]);
 
-        if (Grass.dirty) Grass.repack();
+        for (const patch of Grass.patches) {
+            if (patch.dirty) patch._repack();
+        }
+    }
+
+    // ==================================================================
+    //  PATCH INSTANCE
+    // ==================================================================
+    //  new Grass(centerX, centerZ, width, depth, count, opts)
+    //
+    //  opts:
+    //    capacity     max blades this patch can ever hold (default: count)
+    //    baseColor    [r,g,b]        per-patch base colour
+    //    tipColor     [r,g,b]        per-patch tip colour
+    //    colorVariance, varianceSplitY, varianceLow, varianceHigh
+    //    tipBias, tipEnabled
+    //    renderDist   per-patch fade distance override
+    //    minHeight/maxHeight/minWidth/maxWidth   scatter scale ranges
+    //    heightFn     (x,z) => y     terrain height (default Grass.terrainHeight)
+    //    autoScatter  set false to create an empty patch (default true)
+    // ------------------------------------------------------------------
+    constructor(centerX, centerZ, width, depth, count, opts)
+    {
+        Grass._ensureInit();
+
+        opts = opts || {};
+        this.centerX = centerX;
+        this.centerZ = centerZ;
+        this.width   = width;
+        this.depth   = depth;
+        this.opts    = opts;
+
+        this.capacity = Math.max(1, opts.capacity !== undefined ? opts.capacity : count);
+        this.blades   = [];
+        this.freeList = [];
+        this.liveCount = 0;
+        this.dirty = false;
+        this.matrixData = new Float32Array(this.capacity * 16);
+        this.instanceBuffer = null;
+        this.mi = null;
+        this.destroyed = false;
+
+        // scatter scale ranges (also used for the AABB height margin)
+        this.minH = opts.minHeight !== undefined ? opts.minHeight : 0.5;
+        this.maxH = opts.maxHeight !== undefined ? opts.maxHeight : 1.1;
+        this.minW = opts.minWidth  !== undefined ? opts.minWidth  : 0.7;
+        this.maxW = opts.maxWidth  !== undefined ? opts.maxWidth  : 1.3;
+        this.heightFn = opts.heightFn || Grass.terrainHeight;
+
+        this.entity = new pc.Entity('grassPatch');
+        this.entity.addComponent('render', { meshInstances: [] });
+        game.root.addChild(this.entity);
+
+        // per-patch shader parameter overrides — stored so they survive
+        // mesh (re)installs, applied via meshInstance.setParameter()
+        this._params = {};
+        if (opts.baseColor)                    this._params.uGrassBaseColor = opts.baseColor;
+        if (opts.tipColor)                     this._params.uGrassTipColor  = opts.tipColor;
+        if (opts.colorVariance !== undefined)  this._params.uColorVariance  = opts.colorVariance;
+        if (opts.varianceSplitY !== undefined) this._params.uVarianceSplitY = opts.varianceSplitY;
+        if (opts.varianceLow !== undefined)    this._params.uVarianceLow    = opts.varianceLow;
+        if (opts.varianceHigh !== undefined)   this._params.uVarianceHigh   = opts.varianceHigh;
+        if (opts.tipBias !== undefined)        this._params.uTipBias        = opts.tipBias;
+        if (opts.tipEnabled !== undefined)     this._params.uTipEnabled     = opts.tipEnabled ? 1.0 : 0.0;
+        if (opts.renderDist !== undefined)     this._params.uRenderDist     = opts.renderDist;
+
+        Grass.patches.push(this);
+
+        if (count > 0 && opts.autoScatter !== false) {
+            this.scatter(count);
+        }
+
+        if (Grass.sharedMesh) {
+            this._installMeshInstance();
+        } else if (!Grass._meshPending) {
+            // nobody requested a GLB — fall back to the procedural blade
+            Grass.useProceduralBlade();
+        }
+        // if a GLB is pending, _setSharedMesh() will install us when it lands
+    }
+
+    _installMeshInstance()
+    {
+        if (this.destroyed) return;
+
+        // tear down a previous mesh instance (e.g. GLB replaced procedural)
+        if (this.mi) {
+            this.entity.render.meshInstances = [];
+            this.mi = null;
+        }
+        if (!this.instanceBuffer) {
+            const device = game.graphicsDevice;
+            this.instanceBuffer = new pc.VertexBuffer(
+                device,
+                pc.VertexFormat.getDefaultInstancingFormat(device),
+                this.capacity,
+                { usage: pc.BUFFER_DYNAMIC }
+            );
+        }
+
+        const mi = new pc.MeshInstance(Grass.sharedMesh, Grass.material, this.entity);
+        mi.setInstancing(this.instanceBuffer);
+
+        // tight per-patch AABB — instancing hides instance positions from
+        // the culler, so we supply the patch bounds explicitly. Because
+        // each patch now has correct bounds, we can leave culling ON and
+        // off-screen patches are skipped entirely.
+        const maxBladeY = Grass.sharedBladeHeight * this.maxH;
+        const margin = 2.0; // wind sway + collider push + tip bias
+        mi.setCustomAabb(new pc.BoundingBox(
+            new pc.Vec3(this.centerX, maxBladeY * 0.5, this.centerZ),
+            new pc.Vec3(this.width * 0.5 + margin,
+                        maxBladeY * 0.5 + margin,
+                        this.depth * 0.5 + margin)
+        ));
+
+        // apply per-patch overrides
+        for (const name in this._params) {
+            mi.setParameter(name, this._params[name]);
+        }
+
+        this.mi = mi;
+        this.entity.render.meshInstances = [mi];
+        this.dirty = true;
+    }
+
+    // ------------------------------------------------------------------
+    //  per-patch look setters
+    // ------------------------------------------------------------------
+    _setParam(name, value) {
+        this._params[name] = value;
+        if (this.mi) this.mi.setParameter(name, value);
+    }
+
+    setColors(baseRGB, tipRGB) {
+        if (baseRGB) this._setParam('uGrassBaseColor', baseRGB);
+        if (tipRGB)  this._setParam('uGrassTipColor', tipRGB);
+    }
+
+    setColorVariance(v) {
+        this._setParam('uColorVariance', v);
+    }
+
+    setVarianceSplit(splitY, lowMul, highMul) {
+        this._setParam('uVarianceSplitY', splitY);
+        this._setParam('uVarianceLow', lowMul);
+        this._setParam('uVarianceHigh', highMul);
+    }
+
+    setTipBias(metres, enabled) {
+        this._setParam('uTipBias', metres);
+        this._setParam('uTipEnabled', enabled ? 1.0 : 0.0);
+    }
+
+    setRenderDist(d) {
+        this._setParam('uRenderDist', d);
+    }
+
+    // ------------------------------------------------------------------
+    //  blade management (all patch-local)
+    // ------------------------------------------------------------------
+    addBlade(mat4) {
+        let index;
+        if (this.freeList.length > 0) {
+            index = this.freeList.pop();
+        } else {
+            if (this.liveCount >= this.capacity) return -1;
+            index = this.liveCount++;
+        }
+        this.blades[index] = mat4.clone();
+        this.dirty = true;
+        return index;
+    }
+
+    addBladeTRS(pos, rotDegY, scale) {
+        const m = new pc.Mat4();
+        const q = new pc.Quat().setFromEulerAngles(0, rotDegY || 0, 0);
+        const s = (typeof scale === 'number')
+            ? new pc.Vec3(scale, scale, scale)
+            : (scale || new pc.Vec3(1, 1, 1));
+        m.setTRS(pos, q, s);
+        return this.addBlade(m);
+    }
+
+    addBlades(mat4Array) {
+        const handles = [];
+        for (let i = 0; i < mat4Array.length; i++) {
+            handles.push(this.addBlade(mat4Array[i]));
+        }
+        return handles;
+    }
+
+    // scatter `count` blades inside THIS patch's rectangle
+    scatter(count) {
+        const handles = [];
+        for (let i = 0; i < count; i++) {
+            const x = this.centerX + (Math.random() - 0.5) * this.width;
+            const z = this.centerZ + (Math.random() - 0.5) * this.depth;
+            const h = this.minH + Math.random() * (this.maxH - this.minH);
+            const w = this.minW + Math.random() * (this.maxW - this.minW);
+            handles.push(this.addBladeTRS(
+                new pc.Vec3(x, this.heightFn(x, z), z),
+                Math.random() * 360,
+                new pc.Vec3(w, h, w)
+            ));
+        }
+        return handles;
+    }
+
+    removeBlade(index) {
+        if (index < 0 || index >= this.liveCount) return false;
+        if (!this.blades[index]) return false;
+        this.blades[index] = null;
+        this.freeList.push(index);
+        this.dirty = true;
+        return true;
+    }
+
+    cutRadius(x, z, radius) {
+        // quick reject: circle vs patch rectangle
+        const hx = this.width * 0.5, hz = this.depth * 0.5;
+        const cx = Math.max(this.centerX - hx, Math.min(x, this.centerX + hx));
+        const cz = Math.max(this.centerZ - hz, Math.min(z, this.centerZ + hz));
+        const ddx = x - cx, ddz = z - cz;
+        if (ddx * ddx + ddz * ddz > radius * radius) return 0;
+
+        const r2 = radius * radius;
+        let cut = 0;
+        for (let i = 0; i < this.liveCount; i++) {
+            const m = this.blades[i];
+            if (!m) continue;
+            const d = m.data;
+            const dx = d[12] - x, dz = d[14] - z;
+            if (dx * dx + dz * dz <= r2) {
+                this.blades[i] = null;
+                this.freeList.push(i);
+                cut++;
+            }
+        }
+        if (cut > 0) this.dirty = true;
+        return cut;
+    }
+
+    findBlade(x, z, maxDist) {
+        let best = -1;
+        let bestD = maxDist !== undefined ? maxDist * maxDist : Infinity;
+        for (let i = 0; i < this.liveCount; i++) {
+            const m = this.blades[i];
+            if (!m) continue;
+            const d = m.data;
+            const dx = d[12] - x, dz = d[14] - z;
+            const dd = dx * dx + dz * dz;
+            if (dd < bestD) { bestD = dd; best = i; }
+        }
+        return best;
+    }
+
+    updateBlade(index, mat4) {
+        if (index < 0 || index >= this.liveCount || !this.blades[index]) return false;
+        this.blades[index].copy(mat4);
+        this.dirty = true;
+        return true;
+    }
+
+    getBladePosition(index, out) {
+        if (index < 0 || index >= this.liveCount || !this.blades[index]) return null;
+        const d = this.blades[index].data;
+        out = out || new pc.Vec3();
+        out.set(d[12], d[13], d[14]);
+        return out;
+    }
+
+    clearBlades() {
+        this.blades.length = 0;
+        this.freeList.length = 0;
+        this.liveCount = 0;
+        this.dirty = true;
+    }
+
+    getBladeCount() {
+        return this.liveCount - this.freeList.length;
+    }
+
+    // ------------------------------------------------------------------
+    //  GPU repack (called automatically from the global updater)
+    // ------------------------------------------------------------------
+    _repack()
+    {
+        if (!this.mi) return;
+
+        let write = 0;
+        for (let i = 0; i < this.liveCount; i++) {
+            const m = this.blades[i];
+            if (!m) continue;
+            this.matrixData.set(m.data, write * 16);
+            write++;
+        }
+
+        if (write > 0) {
+            new Float32Array(this.instanceBuffer.lock(), 0, write * 16)
+                .set(this.matrixData.subarray(0, write * 16));
+            this.instanceBuffer.unlock();
+        }
+
+        this.mi.instancingCount = write;
+        this.mi.visible = write > 0;
+        this.dirty = false;
+    }
+
+    // ------------------------------------------------------------------
+    //  teardown
+    // ------------------------------------------------------------------
+    destroy()
+    {
+        if (this.destroyed) return;
+        this.destroyed = true;
+
+        const idx = Grass.patches.indexOf(this);
+        if (idx !== -1) Grass.patches.splice(idx, 1);
+
+        if (this.entity) {
+            this.entity.destroy();
+            this.entity = null;
+        }
+        if (this.instanceBuffer) {
+            this.instanceBuffer.destroy();
+            this.instanceBuffer = null;
+        }
+        this.mi = null;
+        this.blades.length = 0;
     }
 }

@@ -48,8 +48,8 @@ async function init()
 
     const canvas = document.getElementById("game-renderer");
 
-    //let devices = ["webgpu", "webgl2", "webgl"];
-    let devices = ["webgl2", "webgl"];
+    let devices = ["webgpu", "webgl2", "webgl"];
+    //let devices = ["webgl2", "webgl"];
     if(isMobile && window.mobileDevice === "iOS")
         devices = ["webgl2"];
 
@@ -169,7 +169,15 @@ async function init()
     await TerrainMaterial.buildMaterial();
     terrain = new TerrainManager();
 
-    Grass.buildMaterial();
+    const meadow = new Grass(15, -15, 10, 10, 5000);
+    const purple = new Grass(25, -25, 10, 10, 5000, {
+        baseColor: [0.15, 0.10, 0.30],
+        tipColor:  [0.60, 0.35, 0.90],
+        minHeight: 0.4, maxHeight: 0.9,
+        renderDist: 40
+    });
+    purple.cutRadius(25, -25, 2);
+    /*Grass.buildMaterial();
     Grass.setupInstancing();
     Grass.installMesh(
         Grass.createBladeMesh(),
@@ -200,7 +208,6 @@ async function init()
     Grass.setColors([0.1, 0.3, 0.05], [0.6, 0.85, 0.3]);
     Grass.setColorVariance(0.8);
     Grass.setVarianceSplit(0.1, 0.35, 1.0);   // splitY, dim below, bright above*/
-    Grass.repack();
 
     // Start up the login and game clients
     client = new Client();
