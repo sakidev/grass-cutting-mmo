@@ -25,6 +25,7 @@ const utils = require('./src/utils.js');
 const fetch = require('node-fetch');
 const admin = require('./src/admin.js');
 const Loader = require('./src/loader.js');
+global.main.loader = new Loader();
 
 let expressApp;
 // Express is only used privately so that the world server can
@@ -45,7 +46,7 @@ function startExpress()
     });
 }
 
-let app, loader;
+let app;
 
 const AmmoLib = require('./res/ammo.wasm.js');
 
@@ -67,16 +68,6 @@ async function startEngine()
         console.log("PlayCanvas application started.");
     });
     app.start();
-
-    // Initialize the GLB Loader to simulate the world on the WorldServer
-    let promise = new Promise((resolve) => {
-        loader = new Loader(()=>{
-            console.log("Loader initialized.");
-            global.main.loader = loader;
-            resolve();
-        });
-    });
-    await promise;
 
     // Load Ammo.js (Bullet Physics) for physics simulation
     const Ammo = await AmmoLib({
@@ -106,6 +97,8 @@ async function startEngine()
 
     global.main.world = new (require('./src/world.js'))();
     global.main.network = require('./src/network.js');
+
+    global.main.world.loadWorld();
 }
 
 function update(dt){

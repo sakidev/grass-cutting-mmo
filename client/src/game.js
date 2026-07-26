@@ -169,7 +169,7 @@ async function init()
     await TerrainMaterial.buildMaterial();
     terrain = new TerrainManager();
 
-    const meadow = new Grass(15, -15, 10, 10, 5000);
+    /*const meadow = new Grass(15, -15, 10, 10, 5000);
     const purple = new Grass(25, -25, 10, 10, 5000, {
         baseColor: [0.15, 0.10, 0.30],
         tipColor:  [0.60, 0.35, 0.90],
@@ -201,6 +201,22 @@ async function init()
         tipColor:  [0.35, 0.35, 0.90],
         minHeight: 0.4, maxHeight: 1.5,
         renderDist: 40
+    });*/
+    Grass.fromTexture('res/textures/grass_0_0_100_100.png', 200_000,
+    {
+        spawnColor: [255, 255, 255],   // default
+        tolerance: 0.75,              // exact match
+        baseColor: [0.15, 0.10, 0.30],
+        tipColor:  [0.60, 0.35, 0.90],
+        flipZ: true,
+    });
+    Grass.fromTexture('res/textures/grass_0_0_100_100.png', 200_000,
+    {
+        spawnColor: [255, 0, 0],   // default
+        tolerance: 0.75,              // exact match
+        baseColor: [255, 255 * 0.5, 0],
+        tipColor:  [255, 0, 0],
+        flipZ: true,
     });
     /*Grass.buildMaterial();
     Grass.setupInstancing();

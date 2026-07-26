@@ -2,10 +2,7 @@ const pc = require('./playcanvas.js');
 const fs = require('fs');
 
 class Loader {
-  static initializedCallback = null;
-  constructor(initializedCallback) {
-    Loader.initializedCallback = initializedCallback;
-
+  constructor() {
     this.textures = [];
     this.loadingTextures = [];
     this.onLoadedTexturesCallbacks = [];
@@ -15,8 +12,6 @@ class Loader {
     this.sounds = [];
     this.loadingSounds = [];
     this.onLoadedSoundsCallbacks = [];
-
-    Loader.initializedCallback();
   }
 
   setCullModeForMaterial(material, cull) {
@@ -25,6 +20,7 @@ class Loader {
 
   async loadModel(url, modelName, callback) {
     url = "http://localhost:3000/" + url;
+    console.log("Loader.loadModel", url, modelName);
     const existing = this.models.find((m) => m.name === modelName);
     const loading = this.loadingModels.find((m) => m.name === modelName);
     if (existing) {

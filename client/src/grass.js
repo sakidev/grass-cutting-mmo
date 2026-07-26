@@ -1,9 +1,35 @@
 // =====================================================================
 //  GRASS — matrix-instanced, mutable blade list, StandardMaterial
+//
+//  Works in TWO environments from this single file:
+//    - Browser (PlayCanvas client): renders as before, unchanged look.
+//    - Node.js headless server:     no rendering, no DOM. Uses the
+//      server's PlayCanvas build for math (pc.Vec3 / pc.Quat / pc.Mat4).
+//      Same paths, same filename-bounds convention, same scatter / cut /
+//      blade APIs — so server blade state matches the client.
+//
+//  Server extras:
+//    - Decoded texture pixels are CACHED per path — loading the same
+//      mask twice reuses the first decode (both envs).
+//    - Blade positions are kept per patch (they always were) and are
+//      queryable for collisions:
+//          patch.querySphere(x, y, z, radius)        -> blades in range
+//          Grass.querySphereAll(x, y, z, radius)     -> across patches,
+//              skipping any patch whose rectangle is farther than radius
+//          patch.queryRadius(x, z, radius)           -> 2D variant
+//
+//  Server requires:  npm install pngjs     (masks must be PNG)
 // =====================================================================
 
 // ---------------------------------------------------------------------
+//  environment detection (headless = no rendering; pc math still used)
+// ---------------------------------------------------------------------
+const GRASS_HEADLESS =
+    (typeof window === 'undefined' || typeof document === 'undefined');
+
+// ---------------------------------------------------------------------
 //  transformVS — everything except getNormal()
+//  (unused on the server; kept so the file is a single drop-in)
 // ---------------------------------------------------------------------
 const grassVS = `
     uniform float uTime;
@@ -390,31 +416,7 @@ const grassFS_wgsl = `
 
 // =====================================================================
 //  GRASS PATCHES — instance-based, per-patch colors/params
-//
-//  Shader chunk strings (grassVS, grassFS, grassVS_wgsl, grassFS_wgsl,
-//  grassUserMainEndVS_wgsl) are UNCHANGED — keep them exactly as they
-//  are above this class. Only the Grass class is replaced.
-//
-//  Usage:
-//      new Grass(0, 0, 10, 10, 5000);
-//      new Grass(25, -25, 10, 10, 5000, {
-//          baseColor: [0.15, 0.10, 0.30],
-//          tipColor:  [0.60, 0.35, 0.90],
-//          minHeight: 0.4, maxHeight: 0.9
-//      });
-//
-//  How it works:
-//  - ONE shared StandardMaterial + ONE shared blade mesh for all patches
-//    (single shader compile). Per-patch looks are done with
-//    meshInstance.setParameter() overrides, which beat the material's
-//    values at draw time.
-//  - Each patch owns its own instance VertexBuffer, MeshInstance,
-//    entity, blade list and a TIGHT custom AABB — so frustum culling
-//    now actually works per patch (the old code had one giant AABB and
-//    cull disabled).
-//  - Global stuff (time, wind, camera pos, colliders, curvature) is set
-//    once per frame on the shared material by an internal updater that
-//    registers itself in SCRIPTS_TO_UPDATE on first use.
+//  (see original header comments for the rendering design notes)
 // =====================================================================
 
 class Grass
@@ -438,18 +440,25 @@ class Grass
 
     static renderDist = 60;
 
+    // decoded texture pixel cache:  url -> Promise<{data, w, h}>
+    static _pixelCache = new Map();
+
     static _ensureInit()
     {
         if (Grass._inited) return;
         Grass._inited = true;
 
-        Grass._buildMaterial();
+        if (!GRASS_HEADLESS) {
+            Grass._buildMaterial();
+        }
 
-        Grass._updater = {
-            time: 0,
-            update(dt) { Grass._update(dt, this); }
-        };
-        SCRIPTS_TO_UPDATE.push(Grass._updater);
+        if (typeof SCRIPTS_TO_UPDATE !== 'undefined') {
+            Grass._updater = {
+                time: 0,
+                update(dt) { Grass._update(dt, this); }
+            };
+            SCRIPTS_TO_UPDATE.push(Grass._updater);
+        }
     }
 
     static _buildMaterial()
@@ -498,6 +507,102 @@ class Grass
     }
 
     // ------------------------------------------------------------------
+    //  texture pixel loading — cached per path, works in both envs
+    // ------------------------------------------------------------------
+    //  Resolves to { data, w, h } where data is RGBA bytes (Uint8Array /
+    //  Uint8ClampedArray / Buffer — all indexable the same way).
+    //  Failures are NOT cached, so a retry after fixing the file works.
+    static _loadPixels(url)
+    {
+        if (Grass._pixelCache.has(url)) return Grass._pixelCache.get(url);
+
+        let p;
+        if (GRASS_HEADLESS) {
+            p = new Promise((resolve, reject) => {
+                try {
+                    const fs = require('fs');
+                    const { PNG } = require('pngjs');   // npm install pngjs
+                    const png = PNG.sync.read(fs.readFileSync(url));
+                    resolve({ data: png.data, w: png.width, h: png.height });
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        } else {
+            p = new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    try {
+                        const cvs = document.createElement('canvas');
+                        cvs.width = img.width;
+                        cvs.height = img.height;
+                        const ctx = cvs.getContext('2d', { willReadFrequently: true });
+                        ctx.drawImage(img, 0, 0);
+                        const data = ctx.getImageData(0, 0, img.width, img.height).data;
+                        resolve({ data, w: img.width, h: img.height });
+                    } catch (e) {
+                        reject(new Error('pixel read failed (' + e.message +
+                            ') — is the image same-origin / CORS-enabled?'));
+                    }
+                };
+                img.onerror = () => reject(new Error('failed to load ' + url));
+                img.src = url;
+            });
+        }
+
+        Grass._pixelCache.set(url, p);
+        p.catch(() => Grass._pixelCache.delete(url));
+        return p;
+    }
+
+    static clearTextureCache() { Grass._pixelCache.clear(); }
+
+    static fromTexture(url, count, opts)
+    {
+        opts = opts || {};
+
+        // ---- parse world bounds from the filename: ..._minX_minZ_maxX_maxZ.ext
+        const file = url.split('/').pop().split('?')[0];
+        const m = file.match(
+            /(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)_(-?\d+(?:\.\d+)?)\.[a-zA-Z0-9]+$/
+        );
+        if (!m) {
+            console.error('[grass] fromTexture: cannot parse bounds from "' + file +
+                        '" — expected <name>_minX_minZ_maxX_maxZ.png');
+            return null;
+        }
+        let minX = parseFloat(m[1]), minZ = parseFloat(m[2]);
+        let maxX = parseFloat(m[3]), maxZ = parseFloat(m[4]);
+        const width = maxX - minX, depth = maxZ - minZ;
+        if (width <= 0 || depth <= 0) {
+            console.error('[grass] fromTexture: bad bounds (min must be < max) in "' + file + '"');
+            return null;
+        }
+
+        minZ = -minZ;
+        maxZ = -maxZ;
+
+        // ---- create the patch NOW, empty; blades land when pixels decode
+        //      (instant if this texture is already in the cache)
+        const patchOpts = Object.assign({}, opts, { autoScatter: false });
+        if (patchOpts.capacity === undefined) patchOpts.capacity = count;
+
+        const patch = new Grass(minX + width * 0.5, minZ + depth * 0.5,
+                                width, depth, count, patchOpts);
+
+        Grass._loadPixels(url).then((pixels) => {
+            if (patch.destroyed) return;
+            patch._buildMask(pixels, minX, minZ, maxX, maxZ, opts);
+            patch.scatterMasked(count);
+        }).catch((e) => {
+            console.error('[grass] fromTexture: ' + (e && e.message ? e.message : e));
+        });
+
+        return patch;
+    }
+
+    // ------------------------------------------------------------------
     //  shared mesh handling
     // ------------------------------------------------------------------
     static _setSharedMesh(mesh, bladeHeight, hasVC)
@@ -507,23 +612,45 @@ class Grass
         Grass.sharedHasVC = hasVC;
         Grass._meshPending = false;
 
-        Grass.material.setParameter('uBladeHeight', bladeHeight);
-        Grass.material.setParameter('uUseVertexColor', hasVC ? 1.0 : 0.0);
-        Grass.material.update();
+        if (Grass.material) {
+            Grass.material.setParameter('uBladeHeight', bladeHeight);
+            Grass.material.setParameter('uUseVertexColor', hasVC ? 1.0 : 0.0);
+            Grass.material.update();
+        }
 
         // (re)install on every existing patch
         for (const p of Grass.patches) p._installMeshInstance();
     }
 
+    // Server: no mesh, but collision queries use the blade height to build
+    // each blade's vertical segment. Call this with the SAME height the
+    // client ends up with (1.0 for the procedural blade, or the GLB's
+    // height logged by loadBladeGlb) so hit volumes match.
+    static setBladeHeight(h) {
+        Grass.sharedBladeHeight = h;
+    }
+
     static useProceduralBlade()
     {
         Grass._ensureInit();
+        if (GRASS_HEADLESS) {
+            Grass.sharedBladeHeight = 1.0;
+            return;
+        }
         Grass._setSharedMesh(Grass.createBladeMesh(), 1.0, true);
     }
 
     static loadBladeGlb(url, onDone)
     {
         Grass._ensureInit();
+
+        if (GRASS_HEADLESS) {
+            console.warn('[grass] loadBladeGlb ignored on headless server — ' +
+                         'use Grass.setBladeHeight(h) to match the client blade');
+            if (onDone) onDone(false);
+            return;
+        }
+
         Grass._meshPending = true;
 
         const asset = new pc.Asset('grassBlade', 'container', { url: url });
@@ -601,18 +728,21 @@ class Grass
     // ------------------------------------------------------------------
     static setWind(dirXYZ, strength) {
         Grass._ensureInit();
+        if (!Grass.material) return;
         if (dirXYZ) Grass.material.setParameter('uWindDir', dirXYZ);
         if (strength !== undefined) Grass.material.setParameter('uWindStrength', strength);
     }
 
     static setCurvature(strength, exponent) {
         Grass._ensureInit();
+        if (!Grass.material) return;
         if (strength !== undefined) Grass.material.setParameter('uCurvatureStrength', strength);
         if (exponent !== undefined) Grass.material.setParameter('uCurvatureExp', exponent);
     }
 
     static setGrassColliders(list)
     {
+        if (!Grass.material) return;
         const n = Math.min(list ? list.length : 0, Grass.MAX_COLLIDERS);
         for (let i = 0; i < Grass.MAX_COLLIDERS; i++) {
             const s = Grass.colliderSlots[i];
@@ -647,11 +777,38 @@ class Grass
     }
 
     // ------------------------------------------------------------------
+    //  COLLISION QUERIES (server-friendly, also work on the client)
+    // ------------------------------------------------------------------
+    //  Sphere vs all patches. Patches whose rectangle is farther than
+    //  `radius` from the sphere centre are rejected without touching a
+    //  single blade, so far-away patches cost one distance check.
+    //  Returns: [{ patch, index, x, y, z, height, distSq }, ...]
+    static querySphereAll(cx, cy, cz, radius)
+    {
+        const out = [];
+        for (const p of Grass.patches) p.querySphere(cx, cy, cz, radius, out);
+        return out;
+    }
+
+    // 2D (XZ) variant — ignores height entirely.
+    static queryRadiusAll(x, z, radius)
+    {
+        const out = [];
+        for (const p of Grass.patches) p.queryRadius(x, z, radius, out);
+        return out;
+    }
+
+    // ------------------------------------------------------------------
     //  per-frame global update (single registered updater)
     // ------------------------------------------------------------------
     static _update(dt, self)
     {
         self.time += dt;
+
+        if (GRASS_HEADLESS || !Grass.material) {
+            // server: nothing to animate; repacks are moot without a GPU
+            return;
+        }
 
         const cp = camera.entity.getPosition();
         Grass.material.setParameter('uTime', self.time);
@@ -660,7 +817,7 @@ class Grass
         Grass.material.setParameter('uCameraWorldPos', [cp.x, cp.y, cp.z]);
 
         let p;
-        if (!client || !client.mPlayer || !client.mPlayer.entity) {
+        if (typeof client === 'undefined' || !client || !client.mPlayer || !client.mPlayer.entity) {
             p = cp;
         } else {
             p = client.mPlayer.entity.getPosition();
@@ -679,17 +836,9 @@ class Grass
     //  PATCH INSTANCE
     // ==================================================================
     //  new Grass(centerX, centerZ, width, depth, count, opts)
-    //
-    //  opts:
-    //    capacity     max blades this patch can ever hold (default: count)
-    //    baseColor    [r,g,b]        per-patch base colour
-    //    tipColor     [r,g,b]        per-patch tip colour
-    //    colorVariance, varianceSplitY, varianceLow, varianceHigh
-    //    tipBias, tipEnabled
-    //    renderDist   per-patch fade distance override
-    //    minHeight/maxHeight/minWidth/maxWidth   scatter scale ranges
-    //    heightFn     (x,z) => y     terrain height (default Grass.terrainHeight)
-    //    autoScatter  set false to create an empty patch (default true)
+    //  opts: capacity, baseColor, tipColor, colorVariance, varianceSplitY,
+    //        varianceLow, varianceHigh, tipBias, tipEnabled, renderDist,
+    //        minHeight/maxHeight/minWidth/maxWidth, heightFn, autoScatter
     // ------------------------------------------------------------------
     constructor(centerX, centerZ, width, depth, count, opts)
     {
@@ -707,9 +856,10 @@ class Grass
         this.freeList = [];
         this.liveCount = 0;
         this.dirty = false;
-        this.matrixData = new Float32Array(this.capacity * 16);
+        this.matrixData = GRASS_HEADLESS ? null : new Float32Array(this.capacity * 16);
         this.instanceBuffer = null;
         this.mi = null;
+        this.entity = null;
         this.destroyed = false;
 
         // scatter scale ranges (also used for the AABB height margin)
@@ -719,9 +869,11 @@ class Grass
         this.maxW = opts.maxWidth  !== undefined ? opts.maxWidth  : 1.3;
         this.heightFn = opts.heightFn || Grass.terrainHeight;
 
-        this.entity = new pc.Entity('grassPatch');
-        this.entity.addComponent('render', { meshInstances: [] });
-        game.root.addChild(this.entity);
+        if (!GRASS_HEADLESS) {
+            this.entity = new pc.Entity('grassPatch');
+            this.entity.addComponent('render', { meshInstances: [] });
+            game.root.addChild(this.entity);
+        }
 
         // per-patch shader parameter overrides — stored so they survive
         // mesh (re)installs, applied via meshInstance.setParameter()
@@ -742,18 +894,20 @@ class Grass
             this.scatter(count);
         }
 
-        if (Grass.sharedMesh) {
-            this._installMeshInstance();
-        } else if (!Grass._meshPending) {
-            // nobody requested a GLB — fall back to the procedural blade
-            Grass.useProceduralBlade();
+        if (!GRASS_HEADLESS) {
+            if (Grass.sharedMesh) {
+                this._installMeshInstance();
+            } else if (!Grass._meshPending) {
+                // nobody requested a GLB — fall back to the procedural blade
+                Grass.useProceduralBlade();
+            }
+            // if a GLB is pending, _setSharedMesh() will install us when it lands
         }
-        // if a GLB is pending, _setSharedMesh() will install us when it lands
     }
 
     _installMeshInstance()
     {
-        if (this.destroyed) return;
+        if (this.destroyed || GRASS_HEADLESS) return;
 
         // tear down a previous mesh instance (e.g. GLB replaced procedural)
         if (this.mi) {
@@ -774,9 +928,7 @@ class Grass
         mi.setInstancing(this.instanceBuffer);
 
         // tight per-patch AABB — instancing hides instance positions from
-        // the culler, so we supply the patch bounds explicitly. Because
-        // each patch now has correct bounds, we can leave culling ON and
-        // off-screen patches are skipped entirely.
+        // the culler, so we supply the patch bounds explicitly.
         const maxBladeY = Grass.sharedBladeHeight * this.maxH;
         const margin = 2.0; // wind sway + collider push + tip bias
         mi.setCustomAabb(new pc.BoundingBox(
@@ -826,6 +978,81 @@ class Grass
 
     setRenderDist(d) {
         this._setParam('uRenderDist', d);
+    }
+
+    // ------------------------------------------------------------------
+    //  mask building — now takes decoded pixels ({data, w, h}) so the
+    //  same code path serves the browser canvas AND the Node png decode
+    // ------------------------------------------------------------------
+    _buildMask(pixels, minX, minZ, maxX, maxZ, opts)
+    {
+        const w = pixels.w, h = pixels.h;
+        const data = pixels.data;
+
+        const sc    = opts.spawnColor || [255, 0, 0];
+        const tol   = opts.tolerance || 0;
+        const flipZ = !!opts.flipZ;
+
+        // collect every matching pixel + track their bounding box
+        const cells = [];
+        let pxMin = w, pxMax = -1, pyMin = h, pyMax = -1;
+
+        for (let py = 0; py < h; py++) {
+            for (let px = 0; px < w; px++) {
+                const i = (py * w + px) * 4;
+                if (Math.abs(data[i]     - sc[0]) <= tol &&
+                    Math.abs(data[i + 1] - sc[1]) <= tol &&
+                    Math.abs(data[i + 2] - sc[2]) <= tol) {
+                    cells.push(py * w + px);
+                    if (px < pxMin) pxMin = px;
+                    if (px > pxMax) pxMax = px;
+                    if (py < pyMin) pyMin = py;
+                    if (py > pyMax) pyMax = py;
+                }
+            }
+        }
+
+        this.mask = {
+            cells, data, w, h,
+            minX, minZ, maxX, maxZ, flipZ,
+            cellW: (maxX - minX) / w,
+            cellD: (maxZ - minZ) / h,
+            sc, tol
+        };
+
+        console.log('[grass] mask ' + w + 'x' + h + ' — ' + cells.length +
+                    ' spawnable pixels (' +
+                    (100 * cells.length / (w * h)).toFixed(1) + '%)');
+
+        // ---- tighten patch bounds to the matching pixels (better culling,
+        //      faster query/cutRadius quick-reject). Skip if nothing matched.
+        if (cells.length > 0) {
+            const mk = this.mask;
+            const xLo = minX + pxMin * mk.cellW;
+            const xHi = minX + (pxMax + 1) * mk.cellW;
+
+            // rows map straight or flipped depending on flipZ
+            const rowMin = flipZ ? (h - 1 - pyMax) : pyMin;
+            const rowMax = flipZ ? (h - 1 - pyMin) : pyMax;
+            const zLo = minZ + rowMin * mk.cellD;
+            const zHi = minZ + (rowMax + 1) * mk.cellD;
+
+            this.centerX = (xLo + xHi) * 0.5;
+            this.centerZ = (zLo + zHi) * 0.5;
+            this.width   = Math.abs(xHi - xLo);
+            this.depth   = Math.abs(zHi - zLo);
+
+            if (this.mi) {
+                const maxBladeY = Grass.sharedBladeHeight * this.maxH;
+                const margin = 2.0;
+                this.mi.setCustomAabb(new pc.BoundingBox(
+                    new pc.Vec3(this.centerX, maxBladeY * 0.5, this.centerZ),
+                    new pc.Vec3(this.width * 0.5 + margin,
+                                maxBladeY * 0.5 + margin,
+                                this.depth * 0.5 + margin)
+                ));
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -879,6 +1106,40 @@ class Grass
         return handles;
     }
 
+    // Scatter `count` blades, only on matching pixels.
+    scatterMasked(count)
+    {
+        const mk = this.mask;
+        if (!mk) {
+            console.warn('[grass] scatterMasked: no mask built — falling back to scatter()');
+            return this.scatter(count);
+        }
+        if (mk.cells.length === 0) {
+            console.warn('[grass] scatterMasked: no pixels matched spawnColor — nothing spawned');
+            return [];
+        }
+
+        const handles = [];
+        for (let i = 0; i < count; i++) {
+            const cell = mk.cells[(Math.random() * mk.cells.length) | 0];
+            const px = cell % mk.w;
+            const py = (cell / mk.w) | 0;
+
+            const x   = mk.minX + (px + Math.random()) * mk.cellW;
+            const row = mk.flipZ ? (mk.h - 1 - py) : py;
+            const z   = mk.minZ + (row + Math.random()) * mk.cellD;
+
+            const hgt = this.minH + Math.random() * (this.maxH - this.minH);
+            const wdt = this.minW + Math.random() * (this.maxW - this.minW);
+            handles.push(this.addBladeTRS(
+                new pc.Vec3(x, this.heightFn(x, z), z),
+                Math.random() * 360,
+                new pc.Vec3(wdt, hgt, wdt)
+            ));
+        }
+        return handles;
+    }
+
     removeBlade(index) {
         if (index < 0 || index >= this.liveCount) return false;
         if (!this.blades[index]) return false;
@@ -888,13 +1149,18 @@ class Grass
         return true;
     }
 
-    cutRadius(x, z, radius) {
-        // quick reject: circle vs patch rectangle
+    // circle (XZ) vs patch rectangle — shared quick-reject used by
+    // cutRadius and the collision queries
+    _rectCircleReject(x, z, radius) {
         const hx = this.width * 0.5, hz = this.depth * 0.5;
         const cx = Math.max(this.centerX - hx, Math.min(x, this.centerX + hx));
         const cz = Math.max(this.centerZ - hz, Math.min(z, this.centerZ + hz));
         const ddx = x - cx, ddz = z - cz;
-        if (ddx * ddx + ddz * ddz > radius * radius) return 0;
+        return ddx * ddx + ddz * ddz > radius * radius;
+    }
+
+    cutRadius(x, z, radius) {
+        if (this._rectCircleReject(x, z, radius)) return 0;
 
         const r2 = radius * radius;
         let cut = 0;
@@ -911,6 +1177,82 @@ class Grass
         }
         if (cut > 0) this.dirty = true;
         return cut;
+    }
+
+    // ------------------------------------------------------------------
+    //  COLLISION QUERIES
+    // ------------------------------------------------------------------
+    //  Sphere (cx, cy, cz, radius) vs this patch's blades.
+    //  - Patch-level quick reject first: if the sphere's XZ circle
+    //    doesn't touch the patch rectangle, no blade is examined.
+    //  - Each blade is treated as a vertical segment from its base up to
+    //    base + sharedBladeHeight * scaleY (matches the rendered blade,
+    //    ignoring wind sway).
+    //  Appends hits to `out` (created if omitted) and returns it.
+    //  Hit: { patch, index, x, y, z, height, distSq }
+    querySphere(cx, cy, cz, radius, out)
+    {
+        out = out || [];
+        if (this._rectCircleReject(cx, cz, radius)) return out;
+
+        const r2 = radius * radius;
+        const bladeH = Grass.sharedBladeHeight;
+
+        for (let i = 0; i < this.liveCount; i++) {
+            const m = this.blades[i];
+            if (!m) continue;
+            const d = m.data;
+            const bx = d[12], by = d[13], bz = d[14];
+
+            // cheap XZ reject before touching Y
+            const dx = bx - cx, dz = bz - cz;
+            const xz2 = dx * dx + dz * dz;
+            if (xz2 > r2) continue;
+
+            // blade height in world units = mesh height * Y scale
+            // (Y scale = length of the matrix's Y basis column)
+            const sy = Math.sqrt(d[4] * d[4] + d[5] * d[5] + d[6] * d[6]);
+            const top = by + bladeH * sy;
+
+            // closest point on the blade's vertical segment to the sphere centre
+            const ty = Math.max(by, Math.min(cy, top));
+            const dy = ty - cy;
+            const distSq = xz2 + dy * dy;
+
+            if (distSq <= r2) {
+                out.push({
+                    patch: this, index: i,
+                    x: bx, y: by, z: bz,
+                    height: bladeH * sy,
+                    distSq
+                });
+            }
+        }
+        return out;
+    }
+
+    //  2D variant: everything within `radius` of (x, z), height ignored.
+    queryRadius(x, z, radius, out)
+    {
+        out = out || [];
+        if (this._rectCircleReject(x, z, radius)) return out;
+
+        const r2 = radius * radius;
+        for (let i = 0; i < this.liveCount; i++) {
+            const m = this.blades[i];
+            if (!m) continue;
+            const d = m.data;
+            const dx = d[12] - x, dz = d[14] - z;
+            const distSq = dx * dx + dz * dz;
+            if (distSq <= r2) {
+                out.push({
+                    patch: this, index: i,
+                    x: d[12], y: d[13], z: d[14],
+                    distSq
+                });
+            }
+        }
+        return out;
     }
 
     findBlade(x, z, maxDist) {
@@ -953,11 +1295,29 @@ class Grass
         return this.liveCount - this.freeList.length;
     }
 
+    // Utility: does world position (x, z) sit on a spawnable pixel?
+    maskTest(x, z)
+    {
+        const mk = this.mask;
+        if (!mk) return true;
+
+        const px = Math.floor((x - mk.minX) / mk.cellW);
+        let   py = Math.floor((z - mk.minZ) / mk.cellD);
+        if (mk.flipZ) py = mk.h - 1 - py;
+        if (px < 0 || px >= mk.w || py < 0 || py >= mk.h) return false;
+
+        const i = (py * mk.w + px) * 4;
+        return Math.abs(mk.data[i]     - mk.sc[0]) <= mk.tol &&
+            Math.abs(mk.data[i + 1] - mk.sc[1]) <= mk.tol &&
+            Math.abs(mk.data[i + 2] - mk.sc[2]) <= mk.tol;
+    }
+
     // ------------------------------------------------------------------
-    //  GPU repack (called automatically from the global updater)
+    //  GPU repack (client only; server has nothing to upload)
     // ------------------------------------------------------------------
     _repack()
     {
+        if (GRASS_HEADLESS) { this.dirty = false; return; }
         if (!this.mi) return;
 
         let write = 0;
@@ -1001,4 +1361,9 @@ class Grass
         this.mi = null;
         this.blades.length = 0;
     }
+}
+
+// Node export (harmless no-op in the browser without a bundler)
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { Grass };
 }
