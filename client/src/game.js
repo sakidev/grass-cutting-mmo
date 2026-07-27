@@ -158,7 +158,7 @@ async function init()
     document.getElementById("pre-launch").remove();
     document.getElementById("landing").remove();
 
-    //ui = new UI(game);
+    ui = new UI();
 
     window.onblur = function() {
         BLURRED = true;

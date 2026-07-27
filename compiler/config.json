@@ -23,6 +23,9 @@
     "shaders.js",
     "terrain_manager.js",
     "grass.js",
+    "ui.js",
+    "ui_mobile_controls.js",
+    "mobile-joystick.js",
     "game.js"
   ]
 }

@@ -222,49 +222,50 @@ class Player
         this.movementVec.set(0, 0, 0);
         this.latestFacingEulers.set(0, 0, 0);
 
-        let isMoving = false;
+        // --- keyboard: discrete ---
+        if(game.keyboard.isPressed(pc.KEY_W) || game.keyboard.isPressed(pc.KEY_UP))    this.movementVec.z -= 1;
+        if(game.keyboard.isPressed(pc.KEY_S) || game.keyboard.isPressed(pc.KEY_DOWN))  this.movementVec.z += 1;
+        if(game.keyboard.isPressed(pc.KEY_A) || game.keyboard.isPressed(pc.KEY_LEFT))  this.movementVec.x -= 1;
+        if(game.keyboard.isPressed(pc.KEY_D) || game.keyboard.isPressed(pc.KEY_RIGHT)) this.movementVec.x += 1;
 
-        if(game.keyboard.isPressed(pc.KEY_W)
-        || game.keyboard.isPressed(pc.KEY_UP))
+        // --- joystick: analog ---
+        const jx = ui.mobileJoystick.direction.x;
+        const jy = ui.mobileJoystick.direction.y;
+        const jMag = Math.sqrt(jx * jx + jy * jy);
+
+        const DEADZONE = 0.15;
+        if(jMag > DEADZONE)
         {
-            this.movementVec.z -= 1;
-            this.latestFacingEulers.x = -15;
-            isMoving = true;
-        }
-        if(game.keyboard.isPressed(pc.KEY_A)
-        || game.keyboard.isPressed(pc.KEY_LEFT))
-        {
-            this.movementVec.x -= 1;
-            this.latestFacingEulers.z = 15;
-            isMoving = true;
-        }
-        if(game.keyboard.isPressed(pc.KEY_S)
-        || game.keyboard.isPressed(pc.KEY_DOWN))
-        {
-            this.movementVec.z += 1;
-            this.latestFacingEulers.x = 15;
-            isMoving = true;
-        }
-        if(game.keyboard.isPressed(pc.KEY_D)
-        || game.keyboard.isPressed(pc.KEY_RIGHT))
-        {
-            this.movementVec.x += 1;
-            this.latestFacingEulers.z = -15;
-            isMoving = true;
+            // rescale so movement ramps from 0 at the deadzone edge, not from 0.15
+            const scaled = Math.min((jMag - DEADZONE) / (1 - DEADZONE), 1);
+            this.movementVec.x += (jx / jMag) * scaled;
+            this.movementVec.z += (jy / jMag) * scaled;
         }
 
-        this.movementVec.normalize().scale(this.movementSpeed);
+        // clamp to unit length WITHOUT inflating small joystick tilts.
+        // (this replaces the old normalize(), which forced every input to full speed)
+        const inputMag = Math.sqrt(
+            this.movementVec.x * this.movementVec.x +
+            this.movementVec.z * this.movementVec.z
+        );
+
+        if(inputMag > 1)
+        {
+            this.movementVec.x /= inputMag;
+            this.movementVec.z /= inputMag;
+        }
+
+        const isMoving = inputMag > 0.001;
+
+        // lean proportional to input instead of snapping to ±15
+        this.latestFacingEulers.x =  this.movementVec.z * 15;
+        this.latestFacingEulers.z = -this.movementVec.x * 15;
+
+        this.movementVec.mulScalar(this.movementSpeed);
         this.movementVec.add(this.addedVelocity);
         this.movementVec.y = -this.gravity;
 
         this.entity.rigidbody.linearVelocity = this.movementVec;
-
-        /*// If we're moving, calculate the facing angle and apply it to the model holder
-        if(this.movementVec.length() > 0.01)
-        {
-            const angle = Math.atan2(this.movementVec.x, this.movementVec.z) * pc.math.RAD_TO_DEG + 180;
-            this.latestFacingAngle = angle;
-        }*/
 
         this.latestFacingQuat.slerp(
             this.latestFacingQuat,
@@ -301,22 +302,6 @@ class Player
                 this.modelHolder.getEulerAngles(),
                 this.bladeRotation
             );
-
-            // Try to cut grass if we're inside a patch
-            /*const hits = [];
-            const query = Grass.queryRadiusAll(
-                this.entity.getPosition().x,
-                this.entity.getPosition().z,
-                1,
-                hits
-            );
-
-            for(let i = 0; i < hits.length; i++)
-            {
-                const hit = hits[i];
-                // per-blade info available here: h.x, h.y, h.z, h.distSq
-                hit.patch.removeBlade(hit.index);
-            }*/
         }
     }
 
