@@ -5,6 +5,7 @@
   "obfuscate": false,
   "production": false,
   "scriptsOrder": [
+    "constants.js",
     "engine.js",
     "physics.js",
     "bn.js",

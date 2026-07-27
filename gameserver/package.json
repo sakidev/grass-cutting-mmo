@@ -4,6 +4,7 @@
     "express": "^5.2.1",
     "jsdom": "^26.1.0",
     "node-fetch": "^2.6.7",
+    "pngjs": "^7.0.0",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.59.0"
   }
 }

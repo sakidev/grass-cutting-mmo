@@ -301,6 +301,22 @@ class Player
                 this.modelHolder.getEulerAngles(),
                 this.bladeRotation
             );
+
+            // Try to cut grass if we're inside a patch
+            /*const hits = [];
+            const query = Grass.queryRadiusAll(
+                this.entity.getPosition().x,
+                this.entity.getPosition().z,
+                1,
+                hits
+            );
+
+            for(let i = 0; i < hits.length; i++)
+            {
+                const hit = hits[i];
+                // per-blade info available here: h.x, h.y, h.z, h.distSq
+                hit.patch.removeBlade(hit.index);
+            }*/
         }
     }
 

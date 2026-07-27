@@ -88,6 +88,17 @@ function readJSON(res, cb, err) {
   res.onAborted(err);
 }
 
+function bitsToBase64(bits) {
+  const bytes = new Uint8Array(Math.ceil(bits.length / 8));
+  for (let i = 0; i < bits.length; i++) {
+    if (bits[i]) bytes[i >> 3] |= 0x80 >> (i & 7); // MSB-first
+  }
+  return Buffer.from(bytes).toString('base64');
+}
+
+// keep the length alongside it
+//const payload = { n: bits.length, b64: bitsToBase64(bits) };
+
 module.exports = {
     remoteAddressToString,
     makeDelay,

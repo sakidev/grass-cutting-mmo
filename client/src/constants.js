@@ -22,7 +22,3 @@ const GRASS_PATCHES = [
         seed: 2
     }
 ];
-
-module.exports = {
-    GRASS_PATCHES
-};

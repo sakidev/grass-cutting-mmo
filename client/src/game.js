@@ -19,6 +19,7 @@ let USD_PER_SOL = 78.04;
 let USD_PER_SKR = 0.02;
 
 let tempVec;
+let tempVec2;
 
 async function injectAnalytics()
 {
@@ -127,6 +128,7 @@ async function init()
     //installParticleCurvature(game.graphicsDevice);
 
     tempVec = new pc.Vec3();
+    tempVec2 = new pc.Vec3();
 
     // Batcher
     game._batcher = new pc.BatchManager(game.graphicsDevice, game.root, game.scene);
@@ -202,7 +204,7 @@ async function init()
         minHeight: 0.4, maxHeight: 1.5,
         renderDist: 40
     });*/
-    Grass.fromTexture('res/textures/grass_0_0_100_100.png', 200_000,
+    /*Grass.fromTexture('res/textures/grass_0_0_100_100.png', 2000,
     {
         spawnColor: [255, 255, 255],   // default
         tolerance: 0.75,              // exact match
@@ -217,7 +219,7 @@ async function init()
         baseColor: [255, 255 * 0.5, 0],
         tipColor:  [255, 0, 0],
         flipZ: true,
-    });
+    });*/
     /*Grass.buildMaterial();
     Grass.setupInstancing();
     Grass.installMesh(

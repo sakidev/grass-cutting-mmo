@@ -152,3 +152,13 @@ var setMat4Up = (function () {
 
     window.utils = utils;
 })();
+
+function base64ToBits(b64, n) {
+  const bin = atob(b64);
+  const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+  const bits = new Uint8Array(n ?? bytes.length * 8);
+  for (let i = 0; i < bits.length; i++) {
+    bits[i] = (bytes[i >> 3] >> (7 - (i & 7))) & 1;
+  }
+  return bits;
+}

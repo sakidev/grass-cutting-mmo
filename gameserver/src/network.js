@@ -21,7 +21,7 @@ if (process.env.PRODUCTION) {
 // Client WebSockets
 server.ws("/*", {
   idleTimeout: 32,
-  maxBackpressure: 1024,
+  maxBackpressure: 64 * 1024,
   maxPayloadLength: 512,
   compression: uWS.DEDICATED_COMPRESSOR_3KB,
 
@@ -113,7 +113,7 @@ function listen() {
 }
 listen();
 
-/*function broadcast(pkt, exceptThoseInRanked = false){
+function broadcast(pkt, exceptThoseInRanked = false){
   for (let i = 0; i < Player.LIST.length; i++) {
     const player = Player.LIST[i];
     if (!player || player.isBot) continue;
@@ -123,8 +123,9 @@ listen();
       player.ws.send(pkt.buffer, true);
     } catch (err) {}
   }
-}*/
+}
 
 module.exports = {
-  player: Player
+  player: Player,
+  broadcast
 };

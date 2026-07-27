@@ -1,6 +1,8 @@
 const pc = require('./playcanvas.js');
 const { PacketHeader, OutgoingPacket } = require("./packet.js");
 const fs = require('fs');
+const Grass = require('./grass.js');
+const constants = require('./constants.js');
 
 class World {
     constructor(rankedGame) {
@@ -25,6 +27,9 @@ class World {
             }
         }
 
+        this.volumesIdentified = [];
+        this.volumesSpawned = [];
+
         /*this.floor = new pc.Entity("floor");
         this.floor.addComponent("collision", {
             type: "box",
@@ -43,10 +48,29 @@ class World {
         for(let i = 0; i < this.tilePaths.length; i++)
         {
             console.log("Loading World tile", i, ":", this.tilePaths[i]);
-            this.loadWorldTile(
+            await this.loadWorldTile(
                 this.tilePaths[i],
                 this.tilePaths[i].replace(/^res\/world_tiles\//, "").replace("http://localhost:3000/", "")
             );
+        }
+
+        // After all of the terrain world tiles have been loaded up, we can now spawn the grass
+        for(let i = 0; i < constants.GRASS_PATCHES.length; i++)
+        {
+            const newPatch = Grass.fromTexture(
+                constants.GRASS_PATCHES[i].fileName,
+                constants.GRASS_PATCHES[i].bladeAmount,
+                {
+                    spawnColor: constants.GRASS_PATCHES[i].spawnColor,
+                    tolerance: constants.GRASS_PATCHES[i].tolerance,
+                    baseColor: constants.GRASS_PATCHES[i].baseColor,
+                    tipColor: constants.GRASS_PATCHES[i].tipColor,
+                    flipZ: constants.GRASS_PATCHES[i].flipZ,
+                    seed: constants.GRASS_PATCHES[i].seed
+                }
+            );
+
+            constants.GRASS_PATCHES[i].originalPatch = newPatch;
         }
     }
 
@@ -90,28 +114,103 @@ class World {
             global.main.loader.loadModel(path, fileName, (model)=>
             {
                 const instance = model.instantiateRenderEntity();
-                console.log("World tile loaded", instance.name);
-
-                instance.addComponent("collision", {
-                    type: "mesh",
-                    renderAsset: instance.render.asset,
-                });
-                instance.addComponent("rigidbody", {
-                    type: "static",
-                    friction: 0,
-                    restitution: 0
-                });
-
-                instance.collision.on("collisionstart", (result)=>{
-                    const otherEntity = result.other;
-                    console.log("Collision detected between", instance.name, "and", otherEntity.name);
-                });
+                console.log("World tile loaded", path);
 
                 global.main.app.root.addChild(instance);
 
+                // Now iterate all children and ignore the tile itself
                 for(let i = 0; i < instance.children.length; i++)
                 {
+                    const child = instance.children[i];
                     console.log("Child", i, ":", instance.children[i].name);
+                    
+                    if(child.name.includes("tile_"))
+                    {
+                        const instanceTile = child;
+                        instanceTile.addComponent("collision", {
+                            type: "mesh",
+                            renderAsset: instanceTile.render.asset,
+                        });
+                        instanceTile.addComponent("rigidbody", {
+                            type: "static",
+                            friction: 0,
+                            restitution: 0
+                        });
+        
+                        instanceTile.collision.on("collisionstart", (result)=>{
+                            const otherEntity = result.other;
+                            console.log("Collision detected between", instance.name, "and", otherEntity.name);
+                        });
+                    }
+                    // Grass Volumes are used to identify
+                    // areas were huge amounts of grass are present,
+                    // so that we can order the client to load/unload
+                    // them as they enter/exit the volume triggers
+                    else if(child.name.includes("GrassVolume"))
+                    {
+                        const grassVolumeIdx = parseInt(child.name.split("_")[1])
+                        if(this.volumesIdentified.includes(grassVolumeIdx))
+                            continue;
+
+                        console.log("Identified grass volume", grassVolumeIdx, "in world tile", fileName);
+                        this.volumesIdentified.push(grassVolumeIdx);
+
+                        const volume = new pc.Entity("grass_volume_" + grassVolumeIdx);
+                        volume.addComponent("collision", {
+                            type: "box",
+                            halfExtents: child.render.meshInstances[0].aabb.halfExtents,
+                        });
+                        volume.collision.on("triggerenter", (otherEntity)=>{
+                            if(otherEntity.player)
+                            {
+                                console.log("Player", otherEntity.player.id, "entered grass volume", grassVolumeIdx);
+
+                                if(otherEntity.player.ws)
+                                {
+                                    const pkt = new OutgoingPacket(PacketHeader.GameServer.ORDER_LOAD_GRASS_PATCH, 1 + 4 + 4 + (constants.GRASS_PATCHES[grassVolumeIdx - 1].cutBits.length));
+                                    pkt.WriteInt(grassVolumeIdx - 1); // Grass patches array is 0-indexed, but the volume names are 1-indexed, so convert it here
+                                    pkt.WriteInt(constants.GRASS_PATCHES[grassVolumeIdx - 1].cutBits.length);
+                                    for(let j = 0; j < constants.GRASS_PATCHES[grassVolumeIdx - 1].cutBits.length; j++)
+                                    {
+                                        pkt.WriteByte(constants.GRASS_PATCHES[grassVolumeIdx - 1].cutBits[j]);
+                                    }
+                                    try{
+                                        otherEntity.player.ws.send(pkt.buffer, true);
+                                    }catch(err){ }
+
+                                    otherEntity.player.addInsideGrassPatch(
+                                        constants.GRASS_PATCHES[grassVolumeIdx - 1]
+                                    );
+                                    otherEntity.player.sortInsideGrassPatchesByDistance();
+                                }
+                            }
+                        });
+                        volume.collision.on("triggerleave", (otherEntity)=>{
+                            if(otherEntity.player)
+                            {
+                                console.log("Player", otherEntity.player.id, "left grass volume", grassVolumeIdx);
+
+                                if(otherEntity.player.ws)
+                                {
+                                    const pkt = new OutgoingPacket(PacketHeader.GameServer.ORDER_UNLOAD_GRASS_PATCH, 1 + 4);
+                                    pkt.WriteInt(grassVolumeIdx - 1);
+                                    try{
+                                        otherEntity.player.ws.send(pkt.buffer, true);
+                                    }catch(err){ }
+
+                                    otherEntity.player.removeInsideGrassPatch(
+                                        constants.GRASS_PATCHES[grassVolumeIdx - 1]
+                                    );
+                                    otherEntity.player.sortInsideGrassPatchesByDistance();
+                                }
+                            }
+                        });
+                        volume.setPosition(child.getPosition());
+                        console.log(volume.getPosition(), "half extents", volume.collision.halfExtents);
+                        this.volumesSpawned.push(volume);
+                        global.main.app.root.addChild(volume);
+                    }
+
                 }
                 resolve(true);
             });

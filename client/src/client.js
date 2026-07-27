@@ -136,6 +136,66 @@ class Client {
                 }
             }
             break;
+          case PacketHeader.GameServer.ORDER_LOAD_GRASS_PATCH:
+            {
+                const patchIdx = inPkt.ReadInt();
+                const cutBitsLength = inPkt.ReadInt();
+                const cutBits = [];
+                for(let i = 0; i < cutBitsLength; i++)
+                    cutBits.push(inPkt.ReadByte());
+
+                const bitsThatHaveBeenCut = cutBits.filter(bit => bit !== 0).length;
+
+                if(!GRASS_PATCHES[patchIdx].originalPatch)
+                {
+                  const newPatch = Grass.fromTexture(
+                    GRASS_PATCHES[patchIdx].fileName,
+                    GRASS_PATCHES[patchIdx].bladeAmount,
+                    {
+                      spawnColor: GRASS_PATCHES[patchIdx].spawnColor,
+                      tolerance: GRASS_PATCHES[patchIdx].tolerance,
+                      baseColor: GRASS_PATCHES[patchIdx].baseColor,
+                      tipColor:  GRASS_PATCHES[patchIdx].tipColor,
+                      flipZ: true,
+                      cutRaster: cutBits,
+                      seed: GRASS_PATCHES[patchIdx].seed
+                    }
+                  );
+                  GRASS_PATCHES[patchIdx].originalPatch = newPatch;
+                  GRASS_PATCHES[patchIdx].cutBits = cutBits;
+  
+                  console.log("Received ORDER_LOAD_GRASS_PATCH for patchIdx:", patchIdx, "cutBitsLength:", bitsThatHaveBeenCut, "/", cutBitsLength);
+                }
+            }
+            break;
+          case PacketHeader.GameServer.ORDER_UNLOAD_GRASS_PATCH:
+            {
+                const patchIdx = inPkt.ReadInt();
+                //console.log("Received ORDER_UNLOAD_GRASS_PATCH for patchIdx:", patchIdx);
+
+                // For now, do nothing - I have to see if this affects session performance
+            }
+            break;
+          case PacketHeader.GameServer.GRASS_EVENT:
+            {
+              const cutPatchIndex = inPkt.ReadInt();
+              const numBladesCut = inPkt.ReadInt();
+              const cutBladeIndexes = [];
+              for(let i = 0; i < numBladesCut; i++)
+                cutBladeIndexes.push(inPkt.ReadInt());
+
+              const patch = GRASS_PATCHES[cutPatchIndex].originalPatch;
+              if(patch)
+              {
+                patch.cutBlades(cutBladeIndexes);
+                //console.log("Received GRASS_EVENT for patchIdx:", cutPatchIndex, "numBladesCut:", numBladesCut);
+              }
+              else
+              {
+                console.log("Received GRASS_EVENT for patchIdx:", cutPatchIndex, "but patch is not loaded yet!");
+              }
+            }
+            break;
           default:
               console.log("Unhandled packet header:", header);
               break;

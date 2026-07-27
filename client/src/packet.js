@@ -13,6 +13,9 @@ var PacketHeader = {
     ON_AWARENESS_GAINED: 4,
     ON_AWARENESS_LOST: 5,
     ACTORS_SYNC: 6,
+    ORDER_LOAD_GRASS_PATCH: 7,
+    ORDER_UNLOAD_GRASS_PATCH: 8,
+    GRASS_EVENT: 9,
   },
 };
 

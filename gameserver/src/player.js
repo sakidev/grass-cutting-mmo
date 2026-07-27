@@ -1,5 +1,7 @@
 const { PacketHeader, IncomingPacket, OutgoingPacket } = require("./packet.js");
 const pc = require("./playcanvas.js");
+const Grass = require('./grass.js');
+const constants = require('./constants.js');
 
 class Player
 {
@@ -43,6 +45,8 @@ class Player
         this.id = Player.getFreeSlot();
         Player.LIST[this.id] = this;
 
+        this.tempVec = new pc.Vec3();
+
         this.position = new pc.Vec3();
         this.eulers = new pc.Vec3();
         this.bladeRotationSpeed = 0;
@@ -53,6 +57,7 @@ class Player
         this.startPingLoop();
 
         this.awareOfEntities = [];
+        this.insideOfGrassPatches = [];
 
         console.log("Player created with id:", this.id, "name:", this.name);
 
@@ -65,6 +70,45 @@ class Player
         {
             self.spawn();
         }, 1_500);
+    }
+
+    addInsideGrassPatch(patch)
+    {
+        if(this.insideOfGrassPatches.includes(patch)) return;
+        this.insideOfGrassPatches.push(patch);
+    }
+
+    removeInsideGrassPatch(patch)
+    {
+        const index = this.insideOfGrassPatches.indexOf(patch);
+        if(index === -1) return;
+        this.insideOfGrassPatches.splice(index, 1);
+    }
+
+    sortInsideGrassPatchesByDistance()
+    {
+        let closestPatch = null;
+        let closestDistance = Infinity;
+
+        for(let i = 0; i < this.insideOfGrassPatches.length; i++)
+        {
+            const patch = this.insideOfGrassPatches[i];
+            this.tempVec.set(patch.centerX, this.position.y, patch.centerZ);
+            const distance = this.position.distance(this.tempVec);
+            if(distance < closestDistance)
+            {
+                closestDistance = distance;
+                closestPatch = patch;
+            }
+        }
+
+        this.insideOfGrassPatches.sort((a, b) => {
+            this.tempVec.set(a.centerX, this.position.y, a.centerZ);
+            const distanceA = this.position.distance(this.tempVec);
+            this.tempVec.set(b.centerX, this.position.y, b.centerZ);
+            const distanceB = this.position.distance(this.tempVec);
+            return distanceA - distanceB;
+        });
     }
 
     startPingLoop()
@@ -181,6 +225,36 @@ class Player
         this.position.set(pos[0], pos[1], pos[2]);
         this.eulers.set(eulers[0], eulers[1], eulers[2]);
         this.bladeRotationSpeed = bladeRotSpeed;
+
+        for(let i = 0; i < this.insideOfGrassPatches.length; i++)
+        {
+            const patch = this.insideOfGrassPatches[i];
+            if(patch)
+            {
+                // Make cuts
+                this.tempVec.set(this.position.x, this.position.y, this.position.z);
+                const indexesCut = [];
+                const cutBlades = patch.originalPatch.cutRadius(this.tempVec.x, this.tempVec.z, 1, indexesCut);
+                patch.cutBits = patch.originalPatch.cutBits;
+
+                if(cutBlades > 0)
+                {
+                    // Broadcast the cut blades!
+                    const pkt = new OutgoingPacket(
+                        PacketHeader.GameServer.GRASS_EVENT,
+                        1 + 4 + 4 + (indexesCut.length * 4)
+                    );
+                    pkt.WriteInt(constants.GRASS_PATCHES.indexOf(patch));
+                    pkt.WriteInt(indexesCut.length);
+                    for(let i = 0; i < indexesCut.length; i++)
+                        pkt.WriteInt(indexesCut[i]);
+
+                    console.log("Player", this.id, "cut", cutBlades, "blades in patch", constants.GRASS_PATCHES.indexOf(patch), "at position", this.tempVec.toString());
+                    
+                    global.main.network.broadcast(pkt);
+                }
+            }
+        }
     }
 
     onDisconnect()
