@@ -92,6 +92,11 @@ class Player
         });*/
         const playerPrefab = PREFABS.find((p) => p.name === "player").entity.clone();
         playerPrefab.setLocalScale(0.35, 0.35, 0.35);
+        const meshInstances = playerPrefab.render.meshInstances;
+        for(let i = 0; i < meshInstances.length; i++)
+        {
+            meshInstances[i].cull = false;
+        }
         this.modelHolder.addChild(playerPrefab);
         this.bladesHolder = new pc.Entity("bladesHolder_" + this.id);
         playerPrefab.addChild(this.bladesHolder);

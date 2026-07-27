@@ -318,7 +318,7 @@ const curvatureTransformVertexShaderWGSL = `
     }
 `;
 
-let curvatureStrength   = 0.0085;
+let curvatureStrength   = 0.01;
 let curvatureExp        = 2.0;
 let farDistance         = 80.0;
 

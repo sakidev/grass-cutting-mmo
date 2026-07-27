@@ -154,7 +154,7 @@ class Player
         this.awarenessBubble = new pc.Entity("awarenessBubble_" + this.id);
         this.awarenessBubble.addComponent("collision", {
             type: "sphere",
-            radius: 5,
+            radius: 25,
         });
         this.awarenessBubble.collision.on("triggerenter", (otherEntity)=>{
             console.log("Player", this.id, "entered awareness bubble of", otherEntity.name);
@@ -249,7 +249,7 @@ class Player
                     for(let i = 0; i < indexesCut.length; i++)
                         pkt.WriteInt(indexesCut[i]);
 
-                    console.log("Player", this.id, "cut", cutBlades, "blades in patch", constants.GRASS_PATCHES.indexOf(patch), "at position", this.tempVec.toString());
+                    //console.log("Player", this.id, "cut", cutBlades, "blades in patch", constants.GRASS_PATCHES.indexOf(patch), "at position", this.tempVec.toString());
                     
                     global.main.network.broadcast(pkt);
                 }
